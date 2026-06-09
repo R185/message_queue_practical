@@ -115,12 +115,15 @@ void Send(MessageType message) {
 
 ``` mermaid
 flowchart LR
-    A[Send] --> M1(Check overflow) 
+    A[Send] --> M0(Acount threads)
+    M0 --> M1(Check overflow)
     M1 -->|True| M2(Check deadlock possibility)
+    M1 -->|False| M2
     M2 -->|True| M3(Handle deadlock)
-    M2 -->|False| M4(Handle overflow)
+    M2 -->|False; overflow = true| M4(Handle overflow)
+    M2 -->|False; overflow = false| M5(Store message)
     M3 -->|No exception| M4
-    M4 --> M5(Store message)
+    M4 --> M5
     M5 --> M6(Postwork)
 ```
 
@@ -129,13 +132,12 @@ flowchart LR
 ``` mermaid
 flowchart LR
     A[IMessageQueue] --> M3(Handle deadlock)
-    A --> M4(Handle overflow)
+    A --> M0(Acount threads)
     B[Inherited class] --> M1(Check overflow)
+    B --> M4(Handle overflow)
     B --> M2(Check deadlock possibility)
     B --> M5(Store message)
     B --> M6(Postwork)
-
-    C[DequeBoundedMessageQueue] -->|No optimisation possible| M7(Handle overflow)
 ```
 > Возможно придётся вынести Handle overflow тоже в абстрактный метод из-за несовместимости с синхронизаций с конфигурациями.
 
