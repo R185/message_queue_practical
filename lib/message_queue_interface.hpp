@@ -3,6 +3,8 @@
 #include <type_traits>
 #include <optional>
 
+#include "exception.hpp"
+
 namespace message_queue {
 
 template<typename T>
@@ -15,31 +17,115 @@ enum class ThreadAccessCategory {
   kMultipleProducerMultipleConsumer
 };
 
-enum class ExceptionPolicy {
-  kOnConsumerToProducer,
+enum class DeadlockExceptionPolicy {
+  kOnThreadRoleChange,
   kOnDeadlock,
   kNoException
-}
+};
 
 template<
   MessageType ValueType,
   ThreadAccessCategory ThreadCategory,
-  ExceptionPolicy ExceptionPolicy  
+  DeadlockExceptionPolicy ExceptionPolicy  
 >
 class IMessageQueue {
  private:
+  enum class ThreadRole {
+    kProducer,
+    kConsumer,
+    kBoth,
+    kNoInfo
+  };
+
+  static ThreadRole& CurrentThreadRole() {
+    thread_local ThreadRole role = ThreadRole::kNoInfo;
+    return role;
+  }
+
+  void AccountThreads(ThreadRole role) {
+    ThreadRole& current = CurrentThreadRole();
+    if (current == ThreadRole::kNoInfo) {
+      current = role;
+      return;
+    }
+
+    if (current != role) {
+      if constexpr (ExceptionPolicy == DeadlockExceptionPolicy::kOnThreadRoleChange) {
+        throw MessageQueueException("Thread role is changed");
+      }
+      current = ThreadRole::kBoth;
+    }
+  }
+
+  void HandleDeadlock() {
+    if constexpr (ExceptionPolicy != DeadlockExceptionPolicy::kNoException) {
+      throw MessageQueueException("Deadlock detected");
+    }
+  }
+
+  void SendPrework() {
+    AccountThreads(ThreadRole::kProducer);
+    if (CheckDeadlockPossibility()) {
+      HandleDeadlock();
+    }
+    if (CheckOverflow()) {
+      HandleOverflow();
+    }
+  }
+
+  bool TrySendPrework() {
+    AccountThreads(ThreadRole::kProducer);
+    return !(CheckOverflow());
+  }
  protected:
+  ThreadRole GetThreadRole() const noexcept {
+    return CurrentThreadRole();
+  }
+
+  virtual bool CheckOverflow() const noexcept = 0;
+  virtual bool CheckDeadlockPossibility() const noexcept = 0;
+  virtual void HandleOverflow() = 0;
+  virtual void StoreMessage(const ValueType& message) = 0;
+  virtual void StoreMessage(ValueType&& message) = 0;
+  virtual void SendPostwork() {}
  public:
-  void Send(ValueType&& message);
-  void Send(const ValueType& message);
-  bool TrySend(ValueType&& message);
-  bool TrySend(const ValueType& message);
+  IMessageQueue() = default;
+
+  void Send(ValueType&& message) {
+    SendPrework();
+    StoreMessage(std::move(message));
+    SendPostwork();
+  }
+  void Send(const ValueType& message) {
+    SendPrework();
+    StoreMessage(message);
+    SendPostwork();
+  }
+
+  bool TrySend(ValueType&& message) {
+    if (!TrySendPrework()) {
+      return false;
+    }
+    StoreMessage(std::move(message));
+    SendPostwork();
+    return true;
+  }
+  bool TrySend(const ValueType& message) {
+    if (!TrySendPrework()) {
+      return false;
+    }
+    StoreMessage(message);
+    SendPostwork();
+    return true;
+  }
 
   ValueType Read();
+
   std::optional<ValueType> TryRead();
 
-  virtual Size() const noexcept = 0;
-  virtual Clear();
+  virtual std::size_t Size() const noexcept = 0;
+  virtual bool Empty() const noexcept = 0;
+  virtual void Clear();
 
   virtual ~IMessageQueue() = default;
 };
