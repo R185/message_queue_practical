@@ -37,31 +37,36 @@
 | публичный метод | поведение |
 | ------ | -------- |
 | Send | Продюссер отправляет сообщение. Если буффер заполнен -- блокируется поток продюсера, пока не освободится место |
-| TrySend | Продюссер отправляет сообщение, если буффер не заполнен, иначе прокидывается ивент `OVERFLOW` |
-| Read | Консьюмер читает сообщение, если буффер не пустой. Иначе блокируется поток, пока не появится сообщение. сообщение на `head` удаляется |
-| TryRead | Консьюмер читает сообщение, если буффер не пустой. Иначе прокидывается ивент `EMPTY`. сообщение на `head` удаляется |
+| TrySend | Продюсер отправляет сообщение, если буфер не заполнен; иначе возвращает `false` |
+| Read | Консьюмер читает сообщение, если буфер не пустой. Иначе блокируется поток, пока не появится сообщение. Сообщение на `head` удаляется |
+| TryRead | Консьюмер читает сообщение, если буфер не пустой. Иначе возвращает `std::nullopt` |
 | Size | Возвращает количество сообщений в очереди |
-| Capacity | Возвращает максимальное количество сообщений в очереди |
+| Empty | Возвращает `true`, если очередь пуста |
 | Clear | Завершает очередь, разблокировывая все потоки |
 
 -------------------
 
 #### Параметры
 
-| шаблонные параметры    | описание |
-| --------               | -------- |
-| MessageType            | Тип сообщения |
-| thread_access_category | Категория, описывающая, какая категория доступа потоков (`SPSC`, `SPMC`, `MPSC`, `MPMC`). Может быть полезна при параметризации оптимальных методов синхронизации |
-| exception_policy       | Политика, определяющая, как обрабатывать эксепшены |
-> Некоторые шаблонные параметры можно переместить к обычным параметрам. Добавленно сюда, так как появится возможность использовать `if constexpr`
-
-**concept `MessageType`** - MoveConstructible, CopyConstructible.
-
-| параметры | описание |
+| шаблонный параметр | описание |
 | -------- | -------- |
-| timeout | Опциональный параметр, при котором очередь заблокирует поток только на определённый срок, после чего прокинет ивнент `TIMEOUT` |
+| `ValueType` | Тип сообщения. **concept `MessageType`**: MoveConstructible и CopyConstructible |
+| `ThreadCategory` (`ThreadAccessCategory`) | Категория доступа потоков: `kSingleProducerSingleConsumer`, `kMultipleProducerSingleConsumer`, `kSingleProducerMultipleConsume`, `kMultipleProducerMultipleConsumer` |
+| `ExceptionPolicy` (`DeadlockExceptionPolicy`) | Политика обработки дедлоков и смены роли потока (см. ниже) |
 
-*Остальные параметры должны быть определены у классов-наследников.* (например `allocator`, `capacity`)
+| `DeadlockExceptionPolicy` | описание |
+| -------- | -------- |
+| `kOnThreadRoleChange` | Кидать исключение, если поток сначала был consumer, а затем вызвал `Send` (или наоборот для `Read`) |
+| `kOnDeadlock` | Кидать исключение при дедлоке (например, consumer вызывает `Send` при полном буфере в SPSC) |
+| `kNoException` | Не кидать исключение; поток помечается как `kBoth` |
+
+> Некоторые шаблонные параметры можно переместить к обычным параметрам инстанса. Добавлены сюда, так как появится возможность использовать `if constexpr`.
+
+| параметры инстанса | описание |
+| -------- | -------- |
+| `timeout` | Опциональный параметр, при котором очередь заблокирует поток только на определённый срок, после чего вернёт пустой результат или выбросит исключение |
+
+*Остальные параметры должны быть определены у классов-наследников* (например `allocator`, `capacity`).
 
 -------------------
 
@@ -103,18 +108,37 @@ flowchart BT
 
 -------------------
 
-#### overriding методов 
+#### overriding методов
 
 **Реализовывать overriding методов стоит по такому типу:**
 ``` cpp
-virtual void Prework() = 0; // Проверка на переполнение, блокировка, etc.
-virtual void StoreMessage(MessageType message); // Сохранение сообщения в буффер
-virtual void Postwork() = 0; // Разблокировка, etc.
+CheckSendDeadlockPossibility() = 0;
+SyncAndOverflowPrework() = 0;
+TrySyncAndOverflowPrework() = 0;
+StoreMessage(const ValueType& message) = 0;
+StoreMessage(ValueType&& message) = 0;
+SendPostwork() = 0;
 
-void Send(MessageType message) {
-  Prework();
-  StoreMessage(message);
-  Postwork();
+void SendPrework() {
+  AccountThreads(ThreadRole::kProducer);
+  if (CheckSendDeadlockPossibility()) {
+    HandleDeadlock();
+  }
+  SyncAndOverflowPrework();
+}
+
+bool TrySendPrework() {
+  AccountThreads(ThreadRole::kProducer);
+  if (CheckSendDeadlockPossibility()) {
+    return false;
+  }
+  return TrySyncAndOverflowPrework();
+}
+
+void Send(ValueType&& message) {
+  SendPrework();
+  StoreMessage(std::move(message));
+  SendPostwork();
 }
 ```
 
@@ -122,31 +146,77 @@ void Send(MessageType message) {
 
 ``` mermaid
 flowchart LR
-    A[Send] --> M0(Acount threads)
-    M0 --> M1(Check overflow)
-    M1 -->|True| M2(Check deadlock possibility)
-    M1 -->|False| M2
-    M2 -->|True| M3(Handle deadlock)
-    M2 -->|False; overflow = true| M4(Handle overflow)
-    M2 -->|False; overflow = false| M5(Store message)
-    M3 -->|No exception| M4
-    M4 --> M5
-    M5 --> M6(Postwork)
+    A[Send] --> M0(Account threads)
+    M0 --> M1(Check send deadlock)
+    M1 -->|True| M2(Handle deadlock)
+    M1 -->|False| M3(Sync and overflow prework)
+    M2 -->|No exception| M3
+    M3 --> M4(Store message)
+    M4 --> M5(Send postwork)
 ```
 
-**Ответственности overriding методов в классах:**
+**Pipeline `TrySend`**
 
 ``` mermaid
 flowchart LR
-    A[IMessageQueue] --> M3(Handle deadlock)
-    A --> M0(Acount threads)
-    B[Inherited class] --> M1(Check overflow)
-    B --> M4(Handle overflow)
-    B --> M2(Check deadlock possibility)
-    B --> M5(Store message)
-    B --> M6(Postwork)
+    A[TrySend] --> M0(Account threads)
+    M0 --> M1(Check send deadlock)
+    M1 -->|True| M2(Return false)
+    M1 -->|False| M3(Try sync and overflow prework)
+    M3 -->|False| M2
+    M3 -->|True| M4(Store message)
+    M4 --> M5(Send postwork)
+    M5 --> M6(Return true)
 ```
-> Возможно придётся вынести Handle overflow тоже в абстрактный метод из-за несовместимости с синхронизаций с конфигурациями.
+
+**Ответственности методов**
+
+``` mermaid
+flowchart LR
+    A[IMessageQueue] --> M0(Account threads)
+    A --> M2(Handle deadlock)
+    A --> M1(Check send deadlock)
+    B[Inherited class] --> M3(Sync and overflow prework)
+    B --> M3t(Try sync and overflow prework)
+    B --> M4(Store message)
+    B --> M5(Send postwork)
+```
+
+| overriding метод | ответственность |
+| ------------ | --------------- |
+| `CheckSendDeadlockPossibility()` | Проверка вырожденного сценария: поток с ролью consumer пытается записать в полную очередь |
+| `SyncAndOverflowPrework()` | Синхронизация и резолвинг переполнения для блокирующего `Send` (ожидание на `not_full` или drop oldest) |
+| `TrySyncAndOverflowPrework()` | Неблокирующий аналог; возвращает `false`, если запись невозможна |
+| `StoreMessage()` | Запись сообщения в буфер (перегрузки для lvalue и rvalue) |
+| `SendPostwork()` | Пробуждение ожидающих consumer, уведомление семафоров/Condition Variables (по умолчанию no-op) |
+
+**симметричный pipeline для `Read` / `TryRead`:**
+
+``` cpp
+void ReadPrework() {
+  AccountThreads(ThreadRole::kConsumer);
+  if (CheckReadDeadlockPossibility()) {
+    HandleDeadlock();
+  }
+  SyncAndUnderflowPrework();
+}
+
+bool TryReadPrework() {
+  AccountThreads(ThreadRole::kConsumer);
+  if (CheckReadDeadlockPossibility()) {
+    return false;
+  }
+  return TrySyncAndUnderflowPrework();
+}
+```
+
+| overriding метод | ответственность |
+| ---------------------- | --------------- |
+| `CheckReadDeadlockPossibility()` | Producer вызывает `Read` при пустой очереди |
+| `SyncAndUnderflowPrework()` | Синхронизация и ожидание появления элемента |
+| `TrySyncAndUnderflowPrework()` | Неблокирующая проверка наличия элемента |
+| `LoadMessage()` | Извлечение сообщения с `head` |
+| `ReadPostwork()` | Пробуждение ожидающих producer |
 
 -------------------
 
@@ -163,7 +233,7 @@ flowchart LR
 
 В этой конфигурации происходит one-time аллокация буффера размера `capcity`. 
 Сообщения хранятся в циклическом буффере (запись на tail, чтение с head).
-**При попытке послать сообщение при переполненом буффере блокируется поток продюсера**
+**При попытке послать сообщение при переполненом буффере блокируется поток продюсера** (реализуется в `SyncAndOverflowPrework`: ожидание на `not_full`).
 
 При одном чтении, разблокироваться должен 1 продюсер.
 
@@ -173,7 +243,7 @@ flowchart LR
 - Кидать эксепшен при дедлоке.
 - Не кидать.
 
-Значит для некоторых политик нужно сохранять теги у потоков, отвечающие за маркировку консьюмера или продюсера.
+Значит для политик дедлока нужно сохранять теги у потоков через `thread_local ThreadRole` (`AccountThreads`).
 
 Из-за отсутвия замещения целостность данных гарантируется.
 
@@ -209,14 +279,14 @@ flowchart LR
 | thread_access_category | Категория, описывающая, какая категория доступа потоков (`SPSC`, `SPMC`, `MPSC`, `MPMC`). Может быть полезна при параметризации оптимальных методов синхронизации |
 | timeout                | Опциональный параметр, при котором очередь заблокирует поток только на определённый срок, после чего прокинет ивнент `TIMEOUT` |
 | allocator              | Аллокатор |
-| exception_policy       | Политика, определяющая, как обрабатывать эксепшены |
+| exception_policy       | Шаблонный параметр `DeadlockExceptionPolicy` (см. базовый класс) |
 
-**Возможные значения exception_policy**
-| политика                  | описание |
-| --------                  | -------- |
-| `on_consumer_to_producer` | Кидать эксепшен при консюмере, который стал продюссером |
-| `on_deadlock`             | Кидать эксепшен, когда консьюмер пишет сообщение при переполнении буффера (SPSC, MPSC) |
-| `no_exceptions`           | Не кидать эксепшен |
+**Возможные значения `DeadlockExceptionPolicy`**
+| политика | описание |
+| -------- | -------- |
+| `kOnThreadRoleChange` | Кидать исключение при смене роли потока (consumer → producer или наоборот) |
+| `kOnDeadlock` | Кидать исключение, когда consumer вызывает `Send` при переполнении буфера (SPSC, MPSC) |
+| `kNoException` | Не кидать исключение; помечать поток как `kBoth` |
 
 `SPSC` - Single Producer Single Consumer
 `SPMC` - Single Producer Multiple Consumers
@@ -227,16 +297,17 @@ flowchart LR
 |  метод  | поведение         |
 | ------- | ----------------- |
 | Send    | Продюсер отправляет сообщение. Если буффер заполнен -- блокируется поток продюсера, пока не освободится место |
-| TrySend | Продюссер отправляет сообщение, если буффер не заполнен, иначе прокидывается ивент `OVERFLOW` |
-| Read    | Консьюмер читает сообщение, если буффер не пустой. Иначе блокируется поток, пока не появится сообщение. сообщение на `head` удаляется |
-| TryRead | Консьюмер читает сообщение, если буффер не пустой. Иначе прокидывается ивент `EMPTY`. сообщение на `head` удаляется | 
+| TrySend | Продюсер отправляет сообщение, если буфер не заполнен; иначе возвращает `false` |
+| Read    | Консьюмер читает сообщение, если буфер не пустой. Иначе блокируется поток, пока не появится сообщение. Сообщение на `head` удаляется |
+| TryRead | Консьюмер читает сообщение, если буфер не пустой. Иначе возвращает `std::nullopt` | 
 
 ------------------
 
 #### Кольцевая очередь с политикой переполнения «сброс самого старого»
 
 Кольцевая очередь на статическом буфере с вытеснением самого старого элемента при заполнении.  
-Продюсер никогда не блокируется; консьюмер может ожидать появления элементов.
+Продюсер никогда не блокируется; консьюмер может ожидать появления элементов.  
+Переполнение обрабатывается в `SyncAndOverflowPrework`: вытеснение oldest вместо блокировки.
 
 ##### Поведение (сброс самого старого)
 
@@ -351,9 +422,9 @@ flowchart LR
 |  метод  | поведение         |
 | ------- | ----------------- |
 | Send    | Продюсер отправляет сообщение. Если очередь заполнена — блокируется поток продюсера, пока не освободится место |
-| TrySend | Продюсер отправляет сообщение, если очередь не заполнена, иначе прокидывается ивент `OVERFLOW` |
+| TrySend | Продюсер отправляет сообщение, если очередь не заполнена; иначе возвращает `false` |
 | Read    | Консьюмер читает сообщение с головы (с удалением). Если очередь пуста — блокируется поток, пока не появится сообщение |
-| TryRead | Консьюмер читает сообщение с головы (с удалением). Если очередь пуста — прокидывается ивент `EMPTY` |
+| TryRead | Консьюмер читает сообщение с головы (с удалением). Если очередь пуста — возвращает `std::nullopt` |
 | Size    | Текущее число сообщений в очереди |
 | Stats   | Статистика очереди: число записей/чтений, потери (`0` для этой стратегии), время и количество блокировок, пиковый размер |
 | Close   | Закрыть очередь: разбудить всех ожидающих; после закрытия `Read` отдаёт остаток и завершает, `Send` отклоняется |
