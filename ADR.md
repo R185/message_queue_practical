@@ -142,6 +142,42 @@ void Send(ValueType&& message) {
 }
 ```
 
+**overriding методы `Read` / `TryRead`:**
+
+``` cpp
+void ReadPrework() {
+  AccountThreads(ThreadRole::kConsumer);
+  if (CheckReadDeadlockPossibility()) {
+    HandleDeadlock();
+  }
+  SyncAndUnderflowPrework();
+}
+
+bool TryReadPrework() {
+  AccountThreads(ThreadRole::kConsumer);
+  if (CheckReadDeadlockPossibility()) {
+    return false;
+  }
+  return TrySyncAndUnderflowPrework();
+}
+
+ValueType Read() {
+  ReadPrework();
+  ValueType message = PopMessage();
+  ReadPostwork();
+  return message;
+}
+
+std::optional<ValueType> TryRead() {
+  if (!TryReadPrework()) {
+    return std::nullopt;
+  }
+  ValueType message = PopMessage();
+  ReadPostwork();
+  return message;
+}
+```
+
 **Pipeline публичных методов**
 
 ``` mermaid
@@ -175,11 +211,16 @@ flowchart LR
 flowchart LR
     A[IMessageQueue] --> M0(Account threads)
     A --> M2(Handle deadlock)
-    A --> M1(Check send deadlock)
-    B[Inherited class] --> M3(Sync and overflow prework)
-    B --> M3t(Try sync and overflow prework)
-    B --> M4(Store message)
-    B --> M5(Send postwork)
+    A --> M1s(Check send deadlock)
+    A --> M1r(Check read deadlock)
+    B[Inherited class] --> M3o(Sync and overflow prework)
+    B --> M3ot(Try sync and overflow prework)
+    B --> M4s(Store message)
+    B --> M5s(Send postwork)
+    B --> M3u(Sync and underflow prework)
+    B --> M3ut(Try sync and underflow prework)
+    B --> M4r(Pop message)
+    B --> M5r(Read postwork)
 ```
 
 | overriding метод | ответственность |
@@ -188,35 +229,44 @@ flowchart LR
 | `SyncAndOverflowPrework()` | Синхронизация и резолвинг переполнения для блокирующего `Send` (ожидание на `not_full` или drop oldest) |
 | `TrySyncAndOverflowPrework()` | Неблокирующий аналог; возвращает `false`, если запись невозможна |
 | `StoreMessage()` | Запись сообщения в буфер (перегрузки для lvalue и rvalue) |
-| `SendPostwork()` | Пробуждение ожидающих consumer, уведомление семафоров/Condition Variables (по умолчанию no-op) |
+| `SendPostwork()` | Пробуждение ожидающих consumer, уведомление семафоров/Condition Variables |
 
-**симметричный pipeline для `Read` / `TryRead`:**
+**Pipeline `Read`**
 
-``` cpp
-void ReadPrework() {
-  AccountThreads(ThreadRole::kConsumer);
-  if (CheckReadDeadlockPossibility()) {
-    HandleDeadlock();
-  }
-  SyncAndUnderflowPrework();
-}
-
-bool TryReadPrework() {
-  AccountThreads(ThreadRole::kConsumer);
-  if (CheckReadDeadlockPossibility()) {
-    return false;
-  }
-  return TrySyncAndUnderflowPrework();
-}
+``` mermaid
+flowchart LR
+    A[Read] --> M0(Account threads)
+    M0 --> M1(Check read deadlock)
+    M1 -->|True| M2(Handle deadlock)
+    M1 -->|False| M3(Sync and underflow prework)
+    M2 -->|No exception| M3
+    M3 --> M4(Pop message)
+    M4 --> M5(Read postwork)
 ```
 
+**Pipeline `TryRead`**
+
+``` mermaid
+flowchart LR
+    A[TryRead] --> M0(Account threads)
+    M0 --> M1(Check read deadlock)
+    M1 -->|True| M2(Return nullopt)
+    M1 -->|False| M3(Try sync and underflow prework)
+    M3 -->|False| M2
+    M3 -->|True| M4(Pop message)
+    M4 --> M5(Read postwork)
+    M5 --> M6(Return optional)
+```
+
+**overriding методы для `Read` / `TryRead`**
+
 | overriding метод | ответственность |
-| ---------------------- | --------------- |
-| `CheckReadDeadlockPossibility()` | Producer вызывает `Read` при пустой очереди |
-| `SyncAndUnderflowPrework()` | Синхронизация и ожидание появления элемента |
-| `TrySyncAndUnderflowPrework()` | Неблокирующая проверка наличия элемента |
-| `LoadMessage()` | Извлечение сообщения с `head` |
-| `ReadPostwork()` | Пробуждение ожидающих producer |
+| ------------ | --------------- |
+| `CheckReadDeadlockPossibility()` | Producer вызывает `Read` при пустой очереди (симметрия `CheckSendDeadlockPossibility`) |
+| `SyncAndUnderflowPrework()` | Синхронизация и ожидание элемента для блокирующего `Read` |
+| `TrySyncAndUnderflowPrework()` | Неблокирующая проверка; `false`, если читать нечего |
+| `PopMessage()` | Атомарное извлечение с `head`; при исключении элемент остаётся в очереди |
+| `ReadPostwork()` | Пробуждение producer |
 
 -------------------
 

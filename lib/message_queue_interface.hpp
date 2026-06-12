@@ -79,6 +79,22 @@ class IMessageQueue {
     return TrySyncAndOverflowPrework();
   }
 
+  void ReadPrework() {
+    AccountThreads(ThreadRole::kConsumer);
+    if (CheckReadDeadlockPossibility()) {
+      HandleDeadlock();
+    }
+    SyncAndUnderflowPrework();
+  }
+
+  bool TryReadPrework() {
+    AccountThreads(ThreadRole::kConsumer);
+    if (CheckReadDeadlockPossibility()) {
+      return false;
+    }
+    return TrySyncAndUnderflowPrework();
+  }
+
  protected:
   ThreadRole GetThreadRole() const noexcept {
     return CurrentThreadRole();
@@ -87,9 +103,16 @@ class IMessageQueue {
   virtual bool CheckSendDeadlockPossibility() const noexcept = 0;
   virtual void SyncAndOverflowPrework() = 0;
   virtual bool TrySyncAndOverflowPrework() = 0;
-  virtual void StoreMessage(const ValueType& message) = 0;
+  virtual bool CheckReadDeadlockPossibility() const noexcept = 0;
+  virtual void SyncAndUnderflowPrework() = 0;
+  virtual bool TrySyncAndUnderflowPrework() = 0;
+
+  virtual void StoreMessage(const ValueType& message) noexcept = 0;
   virtual void StoreMessage(ValueType&& message) = 0;
+  virtual ValueType PopMessage() = 0;
+
   virtual void SendPostwork() {}
+  virtual void ReadPostwork() {}
 
  public:
   IMessageQueue() = default;
@@ -122,13 +145,25 @@ class IMessageQueue {
     return true;
   }
 
-  ValueType Read();
+  ValueType Read() {
+    ReadPrework();
+    ValueType message = PopMessage();
+    ReadPostwork();
+    return message;
+  }
 
-  std::optional<ValueType> TryRead();
+  std::optional<ValueType> TryRead() {
+    if (!TryReadPrework()) {
+      return std::nullopt;
+    }
+    ValueType message = PopMessage();
+    ReadPostwork();
+    return {message};
+  }
 
   virtual std::size_t Size() const noexcept = 0;
   virtual bool Empty() const noexcept = 0;
-  virtual void Clear();
+  virtual void Clear() = 0;
 
   virtual ~IMessageQueue() = default;
 };
