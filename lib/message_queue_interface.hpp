@@ -65,29 +65,32 @@ class IMessageQueue {
 
   void SendPrework() {
     AccountThreads(ThreadRole::kProducer);
-    if (CheckDeadlockPossibility()) {
+    if (CheckSendDeadlockPossibility()) {
       HandleDeadlock();
     }
-    if (CheckOverflow()) {
-      HandleOverflow();
-    }
+    SyncAndOverflowPrework();
   }
 
   bool TrySendPrework() {
     AccountThreads(ThreadRole::kProducer);
-    return !(CheckOverflow());
+    if (CheckSendDeadlockPossibility()) {
+      return false;
+    }
+    return TrySyncAndOverflowPrework();
   }
+
  protected:
   ThreadRole GetThreadRole() const noexcept {
     return CurrentThreadRole();
   }
 
-  virtual bool CheckOverflow() const noexcept = 0;
-  virtual bool CheckDeadlockPossibility() const noexcept = 0;
-  virtual void HandleOverflow() = 0;
+  virtual bool CheckSendDeadlockPossibility() const noexcept = 0;
+  virtual void SyncAndOverflowPrework() = 0;
+  virtual bool TrySyncAndOverflowPrework() = 0;
   virtual void StoreMessage(const ValueType& message) = 0;
   virtual void StoreMessage(ValueType&& message) = 0;
   virtual void SendPostwork() {}
+
  public:
   IMessageQueue() = default;
 
