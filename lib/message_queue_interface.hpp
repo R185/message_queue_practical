@@ -13,7 +13,7 @@ concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructi
 enum class ThreadAccessCategory {
   kSingleProducerSingleConsumer,
   kMultipleProducerSingleConsumer,
-  kSingleProducerMultipleConsume,
+  kSingleProducerMultipleConsumer,
   kMultipleProducerMultipleConsumer
 };
 
@@ -98,6 +98,10 @@ class IMessageQueue {
  protected:
   ThreadRole GetThreadRole() const noexcept {
     return CurrentThreadRole();
+  }
+
+  bool IsBothRole() const noexcept {
+    return GetThreadRole() == ThreadRole::kBoth;
   }
 
   virtual bool CheckSendDeadlockPossibility() const noexcept = 0;
