@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <optional>
 #include <utility>
 #include <vector>
 
@@ -22,8 +21,6 @@ class ICircularMessageQueue
  protected:
   using Base = IMessageQueue<ValueType, ThreadCategory, ExceptionPolicy>;
   using Sync = CircularQueueSync<ThreadCategory>;
-  using SyncInfoSend = typename Sync::SyncInfoSend;
-  using SyncInfoRead = typename Sync::SyncInfoRead;
 
   Sync sync_;
 
@@ -35,27 +32,17 @@ class ICircularMessageQueue
   std::size_t tail_  = 0ull;
   std::size_t count_ = 0ull;
 
-  std::optional<SyncInfoSend> send_sync_info_;
-  std::optional<SyncInfoRead> read_sync_info_;
  private:
   void AcquireReadOperation() {
-    read_sync_info_ = sync_.AcquireReadOperation();
+    sync_.AcquireReadOperation();
   }
 
   bool TryAcquireReadOperation() {
-    SyncInfoRead info;
-    if (!sync_.TryAcquireReadOperation(info)) {
-      return false;
-    }
-    read_sync_info_ = std::move(info);
-    return true;
+    return sync_.TryAcquireReadOperation();
   }
 
   void CancelReadOperation() {
-    if (read_sync_info_.has_value()) {
-      sync_.CancelReadOperation(*read_sync_info_);
-      read_sync_info_.reset();
-    }
+    sync_.CancelReadOperation();
   }
 
   ValueType ReadHead() {
@@ -75,24 +62,15 @@ class ICircularMessageQueue
   }
 
   void CompleatReadOperation() {
-    if (read_sync_info_.has_value()) {
-      sync_.ReleaseRead(*read_sync_info_);
-      read_sync_info_.reset();
-    }
+    sync_.ReleaseRead();
   }
 
   void CompleatSendOperation() {
-    if (send_sync_info_.has_value()) {
-      sync_.ReleaseSend(*send_sync_info_);
-      send_sync_info_.reset();
-    }
+    sync_.ReleaseSend();
   }
 
   void CancelSendOperation() {
-    if (send_sync_info_.has_value()) {
-      sync_.CancelSendOperation(*send_sync_info_);
-      send_sync_info_.reset();
-    }
+    sync_.CancelSendOperation();
   }
  protected:
   virtual void ResolveReadUnderflowBlocking() = 0;
