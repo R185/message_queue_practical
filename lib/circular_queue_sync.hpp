@@ -60,6 +60,27 @@ class CircularQueueSync<ThreadAccessCategory::kSingleProducerSingleConsumer> {
     return true;
   }
 
+  void AcquireSendBoundedBlock() {
+    free_space_.acquire();
+    send_sync_info_ = SyncInfoSend{true};
+  }
+
+  bool TryAcquireSendBounded() {
+    SyncInfoSend info;
+    if (!free_space_.try_acquire()) {
+      return false;
+    }
+    info.acquired = true;
+    send_sync_info_ = std::move(info);
+    return true;
+  }
+
+  template<std::invocable Func>
+  void WaitSendEnd(Func&&) {}
+
+  template<std::invocable Func>
+  void WaitReadEnd(Func&&) {}
+
   void ReleaseSend() {
     if (!send_sync_info_.has_value()) {
       return;
@@ -162,6 +183,27 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerSingleConsumer> {
     read_sync_info_ = std::move(info);
     return true;
   }
+
+  void AcquireSendBoundedBlock() {
+    free_space_.acquire();
+    send_mutex_.lock();
+    send_sync_info_ = SyncInfoSend{true, true};
+  }
+
+  bool TryAcquireSendBounded() {
+    if (!free_space_.try_acquire()) {
+      return false;
+    }
+    send_mutex_.lock();
+    send_sync_info_ = SyncInfoSend{true, true};
+    return true;
+  }
+
+  template<std::invocable Func>
+  void WaitSendEnd(Func&&) {}
+
+  template<std::invocable Func>
+  void WaitReadEnd(Func&&) {}
 
   void ReleaseSend() {
     if (!send_sync_info_.has_value()) {
@@ -272,6 +314,27 @@ class CircularQueueSync<ThreadAccessCategory::kSingleProducerMultipleConsumer> {
     return true;
   }
 
+  void AcquireSendBoundedBlock() {
+    free_space_.acquire();
+    send_sync_info_ = SyncInfoSend{true};
+  }
+
+  bool TryAcquireSendBounded() {
+    SyncInfoSend info;
+    if (!free_space_.try_acquire()) {
+      return false;
+    }
+    info.acquired = true;
+    send_sync_info_ = std::move(info);
+    return true;
+  }
+
+  template<std::invocable Func>
+  void WaitSendEnd(Func&&) {}
+
+  template<std::invocable Func>
+  void WaitReadEnd(Func&&) {}
+
   void ReleaseSend() {
     if (!send_sync_info_.has_value()) {
       return;
@@ -348,6 +411,8 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerMultipleConsumer>
   std::optional<SyncInfoRead> read_sync_info_;
 
   mutable std::mutex mutex_;
+  std::condition_variable not_full_;
+  std::condition_variable not_empty_;
 
  public:
   explicit CircularQueueSync(std::size_t) {}
@@ -373,10 +438,41 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerMultipleConsumer>
     return true;
   }
 
+  void AcquireSendBoundedBlock() {
+    send_sync_info_ = SyncInfoSend{std::unique_lock(mutex_)};
+  }
+
+  bool TryAcquireSendBounded() {
+    SyncInfoSend info;
+    info.lock = std::unique_lock(mutex_, std::try_to_lock);
+    if (!info.lock.owns_lock()) {
+      return false;
+    }
+    send_sync_info_ = std::move(info);
+    return true;
+  }
+
+  template<std::invocable Func>
+  void WaitSendEnd(Func&& wait_predicate) {
+    if (!send_sync_info_.has_value()) {
+      return;
+    }
+    not_full_.wait(send_sync_info_->lock, [&] { return !wait_predicate(); });
+  }
+
+  template<std::invocable Func>
+  void WaitReadEnd(Func&& wait_predicate) {
+    if (!read_sync_info_.has_value()) {
+      return;
+    }
+    not_empty_.wait(read_sync_info_->lock, [&] { return !wait_predicate(); });
+  }
+
   void ReleaseSend() {
     if (!send_sync_info_.has_value()) {
       return;
     }
+    not_empty_.notify_one();
     send_sync_info_->lock.unlock();
     send_sync_info_.reset();
   }
@@ -385,6 +481,7 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerMultipleConsumer>
     if (!read_sync_info_.has_value()) {
       return;
     }
+    not_full_.notify_one();
     read_sync_info_->lock.unlock();
     read_sync_info_.reset();
   }
