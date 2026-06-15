@@ -75,6 +75,15 @@ class CircularQueueSync<ThreadAccessCategory::kSingleProducerSingleConsumer> {
     return true;
   }
 
+  void AcquireSendOverwriteOldest() {
+    send_sync_info_ = SyncInfoSend{};
+  }
+
+  bool TryAcquireSendOverwriteOldest() {
+    send_sync_info_ = SyncInfoSend{};
+    return true;
+  }
+
   template<std::invocable Func>
   void WaitSendEnd(Func&&) {}
 
@@ -196,6 +205,19 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerSingleConsumer> {
     }
     send_mutex_.lock();
     send_sync_info_ = SyncInfoSend{true, true};
+    return true;
+  }
+
+  void AcquireSendOverwriteOldest() {
+    send_mutex_.lock();
+    send_sync_info_ = SyncInfoSend{false, true};
+  }
+
+  bool TryAcquireSendOverwriteOldest() {
+    if (!send_mutex_.try_lock()) {
+      return false;
+    }
+    send_sync_info_ = SyncInfoSend{false, true};
     return true;
   }
 
@@ -329,6 +351,15 @@ class CircularQueueSync<ThreadAccessCategory::kSingleProducerMultipleConsumer> {
     return true;
   }
 
+  void AcquireSendOverwriteOldest() {
+    send_sync_info_ = SyncInfoSend{};
+  }
+
+  bool TryAcquireSendOverwriteOldest() {
+    send_sync_info_ = SyncInfoSend{};
+    return true;
+  }
+
   template<std::invocable Func>
   void WaitSendEnd(Func&&) {}
 
@@ -443,6 +474,20 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerMultipleConsumer>
   }
 
   bool TryAcquireSendBounded() {
+    SyncInfoSend info;
+    info.lock = std::unique_lock(mutex_, std::try_to_lock);
+    if (!info.lock.owns_lock()) {
+      return false;
+    }
+    send_sync_info_ = std::move(info);
+    return true;
+  }
+
+  void AcquireSendOverwriteOldest() {
+    send_sync_info_ = SyncInfoSend{std::unique_lock(mutex_)};
+  }
+
+  bool TryAcquireSendOverwriteOldest() {
     SyncInfoSend info;
     info.lock = std::unique_lock(mutex_, std::try_to_lock);
     if (!info.lock.owns_lock()) {
