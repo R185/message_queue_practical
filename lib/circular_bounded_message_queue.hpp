@@ -13,23 +13,9 @@ template<
 >
 class CircularBoundedMessageQueue 
     : public ICircularMessageQueue<ValueType, ThreadCategory, ExceptionPolicy, Allocator> {
- private:
-  void WaitNotFullSignal() {
-    sync_.WaitSendEnd([this] () { return IsFull(); });
-  }
-  void WaitNotEmptySignal() {
-    sync_.WaitReadEnd([this] () { return IsEmpty(); });
-  }
-
-  void AcquireSendSpaceBlocking() {
-    sync_.AcquireSendBoundedBlock();
-  }
-  bool TryAcquireSendSpace() {
-    return sync_.TryAcquireSendBounded();
-  }
  protected:
   void ResolveSendOverflowBlocking() override {
-    WaitNotFullSignal();
+    sync_.WaitSendEnd([this] () { return IsFull(); });
   }
 
   bool ResolveSendOverflowTry() override {
@@ -37,7 +23,7 @@ class CircularBoundedMessageQueue
   }
 
   void ResolveReadUnderflowBlocking() override {
-    WaitNotEmptySignal();
+    sync_.WaitReadEnd([this] () { return IsEmpty(); });
   }
 
   bool ResolveReadUnderflowTry() override {
@@ -45,12 +31,12 @@ class CircularBoundedMessageQueue
   }
 
   void SyncAndOverflowPrework() override {
-    AcquireSendSpaceBlocking();
+    sync_.AcquireSendBoundedBlock();
     ResolveSendOverflowBlocking();
   }
 
   bool TrySyncAndOverflowPrework() override {
-    if (!TryAcquireSendSpace()) {
+    if (!sync_.TryAcquireSendBounded()) {
       return false;
     }
     if (!ResolveSendOverflowTry()) {

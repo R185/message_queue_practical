@@ -11,39 +11,23 @@ template<
   typename Allocator = std::allocator<ValueType>
 >
 class CircularDropOldestMessageQueue
-  : public ICircularMessageQueue<ValueType, ThreadCategory, ExceptionPolicy, Allocator> {
- private:
-  void OverwriteSpace() {
-    head_ = (head_ + 1ull) % capacity_;
-  }
-
-  void WaitNotEmptySignal() {
-    sync_.WaitReadEnd([this] () { return IsEmpty(); });
-  }
-
-  void AcquireSendSpaceBlocking() {
-    sync_.AcquireSendOverwriteOldest();
-  }
-  
-  bool TryAcquireSendSpace() {
-    return sync_.TryAcquireSendOverwriteOldest();
-  }
+  : public ICircularMessageQueue<ValueType, ThreadCategory, ExceptionPolicy, Allocator> {  
  protected:
   void ResolveSendOverflowBlocking() override {
     if (IsFull()) {
-      OverwriteSpace();
+      head_ = (head_ + 1ull) % capacity_;
     }
   }
 
   bool ResolveSendOverflowTry() override {
     if (IsFull()) {
-      OverwriteSpace();
+      head_ = (head_ + 1ull) % capacity_;
     }
     return true;
   }
 
   void ResolveReadUnderflowBlocking() override {
-    WaitNotEmptySignal();
+    sync_.WaitReadEnd([this] () { return IsEmpty(); });
   }
 
   bool ResolveReadUnderflowTry() override {
@@ -51,12 +35,12 @@ class CircularDropOldestMessageQueue
   }
   
   void SyncAndOverflowPrework() override {
-    AcquireSendSpaceBlocking();
+    sync_.AcquireSendOverwriteOldest();
     ResolveSendOverflowBlocking();
   }
 
   bool TrySyncAndOverflowPrework() override {
-    if (!TryAcquireSendSpace()) {
+    if (!sync_.TryAcquireSendOverwriteOldest()) {
       return false;
     }
     return ResolveSendOverflowTry();
