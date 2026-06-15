@@ -2,6 +2,7 @@
 
 #include <type_traits>
 #include <optional>
+#include <unordered_map>
 
 #include "exception.hpp"
 
@@ -37,9 +38,13 @@ class IMessageQueue {
     kNoInfo
   };
 
-  static ThreadRole& CurrentThreadRole() {
-    thread_local ThreadRole role = ThreadRole::kNoInfo;
-    return role;
+  static auto& ThreadRolesByInstance() {
+    thread_local std::unordered_map<const IMessageQueue*, ThreadRole> roles;
+    return roles;
+  }
+
+  ThreadRole& CurrentThreadRole() {
+    return ThreadRolesByInstance().try_emplace(this, ThreadRole::kNoInfo).first->second;
   }
 
   void AccountThreads(ThreadRole role) {
@@ -97,7 +102,9 @@ class IMessageQueue {
 
  protected:
   ThreadRole GetThreadRole() const noexcept {
-    return CurrentThreadRole();
+    const auto& roles = ThreadRolesByInstance();
+    const auto it = roles.find(this);
+    return it != roles.end() ? it->second : ThreadRole::kNoInfo;
   }
 
   bool IsBothRole() const noexcept {
@@ -106,12 +113,12 @@ class IMessageQueue {
 
   virtual bool CheckSendDeadlockPossibility() const noexcept = 0;
   virtual void SyncAndOverflowPrework() = 0;
-  virtual bool TrySyncAndOverflowPrework() = 0;
+  virtual bool TrySyncAndOverflowPrework() noexcept = 0;
   virtual bool CheckReadDeadlockPossibility() const noexcept = 0;
   virtual void SyncAndUnderflowPrework() = 0;
-  virtual bool TrySyncAndUnderflowPrework() = 0;
+  virtual bool TrySyncAndUnderflowPrework() noexcept = 0;
 
-  virtual void StoreMessage(const ValueType& message) noexcept = 0;
+  virtual void StoreMessage(const ValueType& message) = 0;
   virtual void StoreMessage(ValueType&& message) = 0;
   virtual ValueType PopMessage() = 0;
 
@@ -167,7 +174,7 @@ class IMessageQueue {
 
   virtual std::size_t Size() const noexcept = 0;
   virtual bool Empty() const noexcept = 0;
-  virtual void Clear() = 0;
+  virtual void Close() = 0;
 
   virtual ~IMessageQueue() = default;
 };
