@@ -142,11 +142,12 @@ class ICircularMessageQueue
     return count_ == 0ull;
   }
 
-  void Clear() override {
+  void Close() override {
     sync_.ExecuteSynced([this] {
-      head_ = 0;
-      tail_ = 0;
-      count_ = 0;
+      head_ = 0ull;
+      tail_ = 0ull;
+      count_ = 0ull;
+      buffer_.clear();
     });
   }
  public:
