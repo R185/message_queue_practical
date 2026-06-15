@@ -1,0 +1,178 @@
+#pragma once
+
+#include <type_traits>
+#include <optional>
+#include <unordered_map>
+
+#include "exception.hpp"
+
+namespace message_queue {
+
+template<typename T>
+concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>;
+
+enum class ThreadAccessCategory {
+  kSingleProducerSingleConsumer,
+  kMultipleProducerSingleConsumer,
+  kSingleProducerMultipleConsumer,
+  kMultipleProducerMultipleConsumer
+};
+
+enum class DeadlockExceptionPolicy {
+  kOnThreadRoleChange,
+  kOnDeadlock,
+  kNoException
+};
+
+template<
+  MessageType ValueType,
+  ThreadAccessCategory ThreadCategory,
+  DeadlockExceptionPolicy ExceptionPolicy  
+>
+class IMessageQueue {
+ private:
+  enum class ThreadRole {
+    kProducer,
+    kConsumer,
+    kBoth,
+    kNoInfo
+  };
+
+  static auto& ThreadRolesByInstance() {
+    thread_local std::unordered_map<const IMessageQueue*, ThreadRole> roles;
+    return roles;
+  }
+
+  ThreadRole& CurrentThreadRole() {
+    return ThreadRolesByInstance().try_emplace(this, ThreadRole::kNoInfo).first->second;
+  }
+
+  void AccountThreads(ThreadRole role) {
+    ThreadRole& current = CurrentThreadRole();
+    if (current == ThreadRole::kNoInfo) {
+      current = role;
+      return;
+    }
+
+    if (current != role) {
+      if constexpr (ExceptionPolicy == DeadlockExceptionPolicy::kOnThreadRoleChange) {
+        throw MessageQueueException("Thread role is changed");
+      }
+      current = ThreadRole::kBoth;
+    }
+  }
+
+  void HandleDeadlock() {
+    if constexpr (ExceptionPolicy != DeadlockExceptionPolicy::kNoException) {
+      throw MessageQueueException("Deadlock detected");
+    }
+  }
+
+  void SendPrework() {
+    AccountThreads(ThreadRole::kProducer);
+    if (CheckSendDeadlockPossibility()) {
+      HandleDeadlock();
+    }
+    SyncAndOverflowPrework();
+  }
+
+  bool TrySendPrework() {
+    AccountThreads(ThreadRole::kProducer);
+    if (CheckSendDeadlockPossibility()) {
+      return false;
+    }
+    return TrySyncAndOverflowPrework();
+  }
+
+  void ReadPrework() {
+    AccountThreads(ThreadRole::kConsumer);
+    if (CheckReadDeadlockPossibility()) {
+      HandleDeadlock();
+    }
+    SyncAndUnderflowPrework();
+  }
+
+  bool TryReadPrework() {
+    AccountThreads(ThreadRole::kConsumer);
+    if (CheckReadDeadlockPossibility()) {
+      return false;
+    }
+    return TrySyncAndUnderflowPrework();
+  }
+
+ protected:
+  ThreadRole GetThreadRole() const noexcept {
+    const auto& roles = ThreadRolesByInstance();
+    const auto it = roles.find(this);
+    return it != roles.end() ? it->second : ThreadRole::kNoInfo;
+  }
+  
+  virtual bool CheckSendDeadlockPossibility() const noexcept = 0;
+  virtual void SyncAndOverflowPrework() = 0;
+  virtual bool TrySyncAndOverflowPrework() noexcept = 0;
+  virtual bool CheckReadDeadlockPossibility() const noexcept = 0;
+  virtual void SyncAndUnderflowPrework() = 0;
+  virtual bool TrySyncAndUnderflowPrework() noexcept = 0;
+
+  virtual void StoreMessage(const ValueType& message) = 0;
+  virtual void StoreMessage(ValueType&& message) = 0;
+  virtual ValueType PopMessage() = 0;
+
+  virtual void SendPostwork() {}
+  virtual void ReadPostwork() {}
+
+ public:
+  IMessageQueue() = default;
+
+  void Send(ValueType&& message) {
+    SendPrework();
+    StoreMessage(std::move(message));
+    SendPostwork();
+  }
+  void Send(const ValueType& message) {
+    SendPrework();
+    StoreMessage(message);
+    SendPostwork();
+  }
+
+  bool TrySend(ValueType&& message) {
+    if (!TrySendPrework()) {
+      return false;
+    }
+    StoreMessage(std::move(message));
+    SendPostwork();
+    return true;
+  }
+  bool TrySend(const ValueType& message) {
+    if (!TrySendPrework()) {
+      return false;
+    }
+    StoreMessage(message);
+    SendPostwork();
+    return true;
+  }
+
+  ValueType Read() {
+    ReadPrework();
+    ValueType message = PopMessage();
+    ReadPostwork();
+    return message;
+  }
+
+  std::optional<ValueType> TryRead() {
+    if (!TryReadPrework()) {
+      return std::nullopt;
+    }
+    ValueType message = PopMessage();
+    ReadPostwork();
+    return {message};
+  }
+
+  virtual std::size_t Size() const noexcept = 0;
+  virtual bool Empty() const noexcept = 0;
+  virtual void Close() = 0;
+
+  virtual ~IMessageQueue() = default;
+};
+
+}  // namespace message_queue
