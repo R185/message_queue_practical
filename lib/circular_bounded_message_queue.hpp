@@ -48,7 +48,8 @@ class CircularBoundedMessageQueue
  public:
   explicit CircularBoundedMessageQueue(std::size_t capacity)
       : ICircularMessageQueue<ValueType, ThreadCategory, ExceptionPolicy, Allocator>(capacity) {}
-  
+      
+  virtual ~CircularBoundedMessageQueue() = default;
 }
 
 }  // namespace message_queue
