@@ -26,14 +26,6 @@ class CircularDropOldestMessageQueue
     return true;
   }
 
-  void ResolveReadUnderflowBlocking() override {
-    sync_.WaitReadEnd([this] () { return IsEmpty(); });
-  }
-
-  bool ResolveReadUnderflowTry() override {
-    return !IsEmpty();
-  }
-  
   void SyncAndOverflowPrework() override {
     sync_.AcquireSendOverwriteOldest();
     ResolveSendOverflowBlocking();

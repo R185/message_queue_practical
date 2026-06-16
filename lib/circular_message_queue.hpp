@@ -73,8 +73,12 @@ class ICircularMessageQueue
     sync_.CancelSendOperation();
   }
  protected:
-  virtual void ResolveReadUnderflowBlocking() = 0;
-  virtual bool ResolveReadUnderflowTry() = 0;
+  void ResolveReadUnderflowBlocking() {
+    sync_.WaitReadEnd([this] () { return IsEmpty(); });
+  }
+  bool ResolveReadUnderflowTry() {
+    return !IsEmpty();
+  }
 
   bool IsFull() const noexcept {
     return count_ >= capacity_;

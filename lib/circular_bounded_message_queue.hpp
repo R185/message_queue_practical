@@ -22,14 +22,6 @@ class CircularBoundedMessageQueue
     return !IsFull();
   }
 
-  void ResolveReadUnderflowBlocking() override {
-    sync_.WaitReadEnd([this] () { return IsEmpty(); });
-  }
-
-  bool ResolveReadUnderflowTry() override {
-    return IsEmpty();
-  }
-
   void SyncAndOverflowPrework() override {
     sync_.AcquireSendBoundedBlock();
     ResolveSendOverflowBlocking();
