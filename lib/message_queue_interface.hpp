@@ -106,7 +106,11 @@ class IMessageQueue {
     const auto it = roles.find(this);
     return it != roles.end() ? it->second : ThreadRole::kNoInfo;
   }
-  
+
+  bool IsBothRole() const noexcept {
+    return GetThreadRole() == ThreadRole::kBoth;
+  }
+
   virtual bool CheckSendDeadlockPossibility() const noexcept = 0;
   virtual void SyncAndOverflowPrework() = 0;
   virtual bool TrySyncAndOverflowPrework() noexcept = 0;
