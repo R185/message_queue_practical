@@ -155,6 +155,8 @@ class ICircularMessageQueue
       : sync_(capacity)
       , buffer_(capacity)
       , capacity_(capacity) {}
+
+  ~ICircularMessageQueue() = default;
 };
 
 }  // namespace message_queue

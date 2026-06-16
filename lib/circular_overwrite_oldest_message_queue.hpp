@@ -48,6 +48,8 @@ class CircularDropOldestMessageQueue
  public:
   explicit CircularDropOldestMessageQueue(std::size_t capacity)
     : ICircularMessageQueue<ValueType, ThreadCategory, ExceptionPolicy, Allocator>(capacity) {}
+  
+  virtual ~CircularDropOldestMessageQueue() = default; 
 };
 
 }  // namespace message_queue
