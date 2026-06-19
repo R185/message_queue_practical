@@ -16,7 +16,8 @@ template <MessageType ValueType, ThreadAccessCategory ThreadCategory,
 class DequeBoundedMessageQueue final
     : public IMessageQueue<ValueType, ThreadCategory, ExceptionPolicy> {
  public:
-  explicit DequeBoundedMessageQueue(std::size_t capacity) : free_(capacity) {
+  explicit DequeBoundedMessageQueue(std::size_t capacity)
+      : capacity_(capacity), free_(capacity) {
     if (capacity == 0) {
       throw MessageQueueException("DequeBoundedMessageQueue: capacity must be >= 1");
     }
@@ -44,6 +45,9 @@ class DequeBoundedMessageQueue final
         return;
       }
       closed_ = true;
+      buffer_.clear();
+      used_ = 0;
+      free_ = capacity_;
     }
     not_full_.notify_all();
     not_empty_.notify_all();
@@ -170,6 +174,7 @@ class DequeBoundedMessageQueue final
   mutable std::mutex mutex_;
   std::condition_variable not_full_;
   std::condition_variable not_empty_;
+  const std::size_t capacity_;
   std::size_t free_;
   std::size_t used_ = 0;
   Container buffer_;
