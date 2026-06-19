@@ -43,6 +43,27 @@ class IMessageQueue {
     return roles;
   }
 
+  static void MoveThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {
+    auto& roles = ThreadRolesByInstance();
+    const auto it = roles.find(from);
+    if (it != roles.end()) {
+      roles[to] = it->second;
+      roles.erase(it);
+    }
+  }
+
+  static void CopyThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {
+    auto& roles = ThreadRolesByInstance();
+    const auto it = roles.find(from);
+    if (it != roles.end()) {
+      roles[to] = it->second;
+    }
+  }
+
+  static void DeleteThreadRole(const IMessageQueue* instance) noexcept {
+    ThreadRolesByInstance().erase(instance);
+  }
+
   ThreadRole& CurrentThreadRole() {
     return ThreadRolesByInstance().try_emplace(this, ThreadRole::kNoInfo).first->second;
   }
@@ -114,19 +135,42 @@ class IMessageQueue {
   virtual bool CheckSendDeadlockPossibility() const noexcept = 0;
   virtual void SyncAndOverflowPrework() = 0;
   virtual bool TrySyncAndOverflowPrework() noexcept = 0;
+  virtual void StoreMessage(const ValueType& message) = 0;
+  virtual void StoreMessage(ValueType&& message) = 0;
+  virtual void SendPostwork() {}
+
   virtual bool CheckReadDeadlockPossibility() const noexcept = 0;
   virtual void SyncAndUnderflowPrework() = 0;
   virtual bool TrySyncAndUnderflowPrework() noexcept = 0;
-
-  virtual void StoreMessage(const ValueType& message) = 0;
-  virtual void StoreMessage(ValueType&& message) = 0;
   virtual ValueType PopMessage() = 0;
-
-  virtual void SendPostwork() {}
   virtual void ReadPostwork() {}
 
  public:
   IMessageQueue() = default;
+
+  IMessageQueue(const IMessageQueue& other) {
+    CopyThreadRole(&other, this);
+  }
+
+  IMessageQueue& operator=(const IMessageQueue& other) {
+    if (this != &other) {
+      DeleteThreadRole(this);
+      CopyThreadRole(&other, this);
+    }
+    return *this;
+  }
+
+  IMessageQueue(IMessageQueue&& other) noexcept {
+    MoveThreadRole(&other, this);
+  }
+
+  IMessageQueue& operator=(IMessageQueue&& other) noexcept {
+    if (this != &other) {
+      DeleteThreadRole(this);
+      MoveThreadRole(&other, this);
+    }
+    return *this;
+  }
 
   void Send(ValueType&& message) {
     SendPrework();
@@ -176,7 +220,9 @@ class IMessageQueue {
   virtual bool Empty() const noexcept = 0;
   virtual void Close() = 0;
 
-  virtual ~IMessageQueue() = default;
+  virtual ~IMessageQueue() {
+    DeleteThreadRole(this);
+  }
 };
 
 }  // namespace message_queue
