@@ -28,6 +28,11 @@ struct QueueStats {
     std::atomic<size_t> successful_operations{0};
 };
 
+struct QueueStatsSnapshot {
+    size_t cas_retries = 0;
+    size_t successful_operations = 0;
+};
+
 template<typename T, typename Allocator = std::allocator<Node<T>>>
 class Queue {
     std::atomic<Node<T>*> head_;
@@ -168,7 +173,7 @@ class Queue {
                     return current_size_.load() > 0 || is_closed.load();
                 });
 
-                if (is_closed.load() || current_size_.load() == 0) {
+                if (is_closed.load() && current_size_.load() == 0) {
                     return std::nullopt;
                 }
             }
@@ -205,8 +210,8 @@ class Queue {
             return current_size_.load();
         };
         
-        QueueStats Stats() const {
-            return stats_;
+        QueueStatsSnapshot Stats() const {
+            return {stats_.cas_retries.load(), stats_.successful_operations.load()};
         };
         
         void Close() {
