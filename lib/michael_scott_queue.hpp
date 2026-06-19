@@ -3,7 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
-#include <memory>
+#include <vector>
 #include <mutex>
 #include <utility>
 #include <optional>
@@ -38,9 +38,12 @@ class Queue {
     std::atomic<Node<T>*> head_;
     std::atomic<Node<T>*> tail_;
 
-    std::mutex mtx;
-    std::condition_variable not_empty;
-    std::condition_variable not_full;
+    std::vector<Node<T>*> retired_nodes_;
+    std::mutex retired_mtx_;
+
+    std::mutex mtx_;
+    std::condition_variable not_empty_;
+    std::condition_variable not_full_;
 
     std::atomic<size_t> current_size_{0};
     const size_t kCapacity_ = 0;
@@ -93,13 +96,15 @@ class Queue {
                         continue;
                     }
 
-                    T res = std::move(next->value);
-
                     if (head_.compare_exchange_weak(first, next)) {
-                        first->~Node();
+                        T res = std::move(next->value);
 
-                        allocator_.deallocate(first, 1);
+                        {
+                            std::lock_guard<std::mutex> lock(retired_mtx_);
 
+                            retired_nodes_.push_back(first);
+                        }
+                        
                         return res;
                     }
                 }
@@ -128,13 +133,19 @@ class Queue {
 
                 allocator_.deallocate(current, 1);
             }
+
+            for (Node<T>* current : retired_nodes_) {
+                current->~Node();
+                
+                allocator_.deallocate(current, 1);
+            }
         }
 
         bool Send(T value) {
             {
-                std::unique_lock<std::mutex> lock(mtx);
+                std::unique_lock<std::mutex> lock(mtx_);
 
-                not_full.wait(lock, [this] {
+                not_full_.wait(lock, [this] {
                     return current_size_.load() < kCapacity_ || is_closed.load();
                 });
 
@@ -147,7 +158,7 @@ class Queue {
 
             current_size_.fetch_add(1);
             stats_.successful_operations.fetch_add(1);
-            not_empty.notify_one();
+            not_empty_.notify_one();
 
             return true;
         };
@@ -161,32 +172,35 @@ class Queue {
 
             current_size_.fetch_add(1);
             stats_.successful_operations.fetch_add(1);
-            not_empty.notify_one();
+            not_empty_.notify_one();
 
             return true;
         };
         
         std::optional<T> Read() {
-            {
-                std::unique_lock<std::mutex> lock(mtx);
-                not_empty.wait(lock, [this] {
-                    return current_size_.load() > 0 || is_closed.load();
-                });
+            while (true) {
+                {
+                    std::unique_lock<std::mutex> lock(mtx_);
+                    not_empty_.wait(lock, [this] {
+                        return current_size_.load() > 0 || is_closed.load();
+                    });
 
-                if (is_closed.load() && current_size_.load() == 0) {
-                    return std::nullopt;
+                    if (is_closed.load() && current_size_.load() == 0) {
+                        return std::nullopt;
+                    }
                 }
+
+                std::optional<T> result = PopMessage();
+
+                if (result) {
+                    current_size_.fetch_sub(1);
+                    stats_.successful_operations.fetch_add(1);
+                    not_full_.notify_one();
+                    
+                    return result;
+                }
+
             }
-
-            std::optional<T> result = PopMessage();
-
-            if (result) {
-                current_size_.fetch_sub(1);
-                stats_.successful_operations.fetch_add(1);
-                not_full.notify_one();
-            }
-
-            return result;
         }
         
         std::optional<T> TryRead() {
@@ -200,7 +214,7 @@ class Queue {
                 current_size_.fetch_sub(1);
                 stats_.successful_operations.fetch_add(1);
                 
-                not_full.notify_one();
+                not_full_.notify_one();
             }
             
             return result;
@@ -217,8 +231,8 @@ class Queue {
         void Close() {
             is_closed.store(true);
 
-            not_empty.notify_all();
+            not_empty_.notify_all();
 
-            not_full.notify_all();
+            not_full_.notify_all();
         };
 };
