@@ -9,9 +9,9 @@
 namespace message_queue {
 
 template<typename T>
-concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>;
+concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>; // unique_ptr плачут, но кажется им никто не поможет
 
-enum class ThreadAccessCategory {
+enum class ThreadAccessCategory { 
   kSingleProducerSingleConsumer,
   kMultipleProducerSingleConsumer,
   kSingleProducerMultipleConsumer,
@@ -31,7 +31,7 @@ template<
 >
 class IMessageQueue {
  private:
-  enum class ThreadRole {
+  enum class ThreadRole { // 
     kProducer,
     kConsumer,
     kBoth,
@@ -39,16 +39,17 @@ class IMessageQueue {
   };
 
   static auto& ThreadRolesByInstance() {
-    thread_local std::unordered_map<const IMessageQueue*, ThreadRole> roles;
+    thread_local std::unordered_map<const IMessageQueue*, ThreadRole> roles; // а что если захотим переместить объект очереди в другой поток?
     return roles;
   }
 
-  static void MoveThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {
+  static void MoveThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {template<typename T>
+concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>;
     auto& roles = ThreadRolesByInstance();
     const auto it = roles.find(from);
     if (it != roles.end()) {
-      roles[to] = it->second;
-      roles.erase(it);
+      roles[to] = it->second; // !!! если нет объекта к кому переносить, то он будет создан и произойдет рехеширование 
+      roles.erase(it); // а потом ты кого-то убьешь и умрешь
     }
   }
 
@@ -65,7 +66,7 @@ class IMessageQueue {
   }
 
   ThreadRole& CurrentThreadRole() {
-    return ThreadRolesByInstance().try_emplace(this, ThreadRole::kNoInfo).first->second;
+    return ThreadRolesByInstance().try_emplace(this, ThreadRole::kNoInfo).first->second; // можно было тоже noexcept наверное
   }
 
   void AccountThreads(ThreadRole role) {
@@ -79,7 +80,9 @@ class IMessageQueue {
       if constexpr (ExceptionPolicy == DeadlockExceptionPolicy::kOnThreadRoleChange) {
         throw MessageQueueException("Thread role is changed");
       }
-      current = ThreadRole::kBoth;
+      current = ThreadRole::kBoth; // пока не ясно почему ты не позволяешь изменить роль на другую, а вообще 
+                                  // как будто бы kBoth не безопасен при работе в одном потоке
+                                 // ну влад видимо поэтому такие очереди послал
     }
   }
 
@@ -92,7 +95,7 @@ class IMessageQueue {
   void SendPrework() {
     AccountThreads(ThreadRole::kProducer);
     if (CheckSendDeadlockPossibility()) {
-      HandleDeadlock();
+      HandleDeadlock(); // кажется можно было просто сюда кинуть throw, а не множить код
     }
     SyncAndOverflowPrework();
   }
@@ -136,7 +139,7 @@ class IMessageQueue {
   virtual void SyncAndOverflowPrework() = 0;
   virtual bool TrySyncAndOverflowPrework() noexcept = 0;
   virtual void StoreMessage(const ValueType& message) = 0;
-  virtual void StoreMessage(ValueType&& message) = 0;
+  virtual void StoreMessage(ValueType&& message) = 0; 
   virtual void SendPostwork() {}
 
   virtual bool CheckReadDeadlockPossibility() const noexcept = 0;
