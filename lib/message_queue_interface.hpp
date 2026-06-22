@@ -9,9 +9,9 @@
 namespace message_queue {
 
 template<typename T>
-concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>; // unique_ptr плачут, но кажется им никто не поможет
+concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>;
 
-enum class ThreadAccessCategory { 
+enum class ThreadAccessCategory {
   kSingleProducerSingleConsumer,
   kMultipleProducerSingleConsumer,
   kSingleProducerMultipleConsumer,
@@ -39,7 +39,7 @@ class IMessageQueue {
   };
 
   static auto& ThreadRolesByInstance() {
-    thread_local std::unordered_map<const IMessageQueue*, ThreadRole> roles; // а что если захотим переместить объект очереди в другой поток?
+    thread_local std::unordered_map<const IMessageQueue*, ThreadRole> roles;
     return roles;
   }
 
@@ -48,8 +48,8 @@ concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructi
     auto& roles = ThreadRolesByInstance();
     const auto it = roles.find(from);
     if (it != roles.end()) {
-      roles[to] = it->second; // !!! если нет объекта к кому переносить, то он будет создан и произойдет рехеширование 
-      roles.erase(it); // а потом ты кого-то убьешь и умрешь
+      roles[to] = it->second;
+      roles.erase(it);
     }
   }
 
@@ -66,7 +66,7 @@ concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructi
   }
 
   ThreadRole& CurrentThreadRole() {
-    return ThreadRolesByInstance().try_emplace(this, ThreadRole::kNoInfo).first->second; // можно было тоже noexcept наверное
+    return ThreadRolesByInstance().try_emplace(this, ThreadRole::kNoInfo).first->second;
   }
 
   void AccountThreads(ThreadRole role) {
@@ -80,9 +80,7 @@ concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructi
       if constexpr (ExceptionPolicy == DeadlockExceptionPolicy::kOnThreadRoleChange) {
         throw MessageQueueException("Thread role is changed");
       }
-      current = ThreadRole::kBoth; // пока не ясно почему ты не позволяешь изменить роль на другую, а вообще 
-                                  // как будто бы kBoth не безопасен при работе в одном потоке
-                                 // ну влад видимо поэтому такие очереди послал
+      current = ThreadRole::kBoth;
     }
   }
 
@@ -95,7 +93,7 @@ concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructi
   void SendPrework() {
     AccountThreads(ThreadRole::kProducer);
     if (CheckSendDeadlockPossibility()) {
-      HandleDeadlock(); // кажется можно было просто сюда кинуть throw, а не множить код
+      HandleDeadlock();
     }
     SyncAndOverflowPrework();
   }
