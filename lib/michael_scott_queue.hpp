@@ -3,10 +3,11 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
-#include <memory>
+#include <vector>
 #include <mutex>
 #include <utility>
-#include <optional>
+
+#include "message_queue_interface.hpp"
 
 template<typename T>
 struct Node {
@@ -33,14 +34,22 @@ struct QueueStatsSnapshot {
     size_t successful_operations = 0;
 };
 
-template<typename T, typename Allocator = std::allocator<Node<T>>>
-class Queue {
+template<
+  message_queue::MessageType T,
+  message_queue::ThreadAccessCategory Category,
+  message_queue::DeadlockExceptionPolicy Policy,
+  typename Allocator = std::allocator<Node<T>>
+>
+class MichaelScottQueue : public message_queue::IMessageQueue<T, Category, Policy> {
     std::atomic<Node<T>*> head_;
     std::atomic<Node<T>*> tail_;
 
-    std::mutex mtx;
-    std::condition_variable not_empty;
-    std::condition_variable not_full;
+    std::vector<Node<T>*> retired_nodes_;
+    std::mutex retired_mtx_;
+
+    std::mutex mtx_;
+    std::condition_variable not_empty_;
+    std::condition_variable not_full_;
 
     std::atomic<size_t> current_size_{0};
     const size_t kCapacity_ = 0;
@@ -49,7 +58,7 @@ class Queue {
     QueueStats stats_;
     Allocator allocator_;
 
-    void StoreMessage(T value) {
+    void StoreInternal(T&& value) {
         Node<T>* new_node = allocator_.allocate(1);
         new (new_node) Node<T>{std::move(value)};
 
@@ -75,42 +84,111 @@ class Queue {
         }
     }
 
-    std::optional<T> PopMessage() {
-        while(true) {
-            Node<T>* first = head_.load();
-            Node<T>* last = tail_.load();
-            Node<T>* next = first->next.load();
+    protected:
+        void SyncAndOverflowPrework() override {
+            std::unique_lock<std::mutex> lock(mtx_);
 
-            if (first == head_.load()) {
-                if (first == last) {
-                    if (next == nullptr) {
-                        return std::nullopt;
-                    }
-                    
-                    tail_.compare_exchange_strong(last, next);
-                } else {
-                    if (next == nullptr) {
-                        continue;
-                    }
+            not_full_.wait(lock, [this] {
+                return current_size_.load() < kCapacity_ || is_closed.load();
+            });
 
-                    T res = std::move(next->value);
+            if (is_closed.load()) {
+                throw message_queue::MessageQueueException("Closed");
+            }
+        }
 
-                    if (head_.compare_exchange_weak(first, next)) {
-                        first->~Node();
+        bool TrySyncAndOverflowPrework() noexcept override {
+            return !is_closed.load() && current_size_.load() < kCapacity_;
+        }
 
-                        allocator_.deallocate(first, 1);
+        void StoreMessage(T&& value) override {
+            StoreInternal(std::move(value)); 
+        }
 
-                        return res;
+        void StoreMessage(const T& value) override {
+            T copy = value;
+
+            StoreInternal(std::move(copy));
+        }
+
+        void SendPostwork() override {
+            current_size_.fetch_add(1);
+
+            stats_.successful_operations.fetch_add(1);
+
+            not_empty_.notify_one();
+        }
+
+        void SyncAndUnderflowPrework() override {
+            std::unique_lock<std::mutex> lock(mtx_);
+            
+            not_empty_.wait(lock, [this] {
+                return current_size_.load() > 0 || is_closed.load();
+            });
+
+            if (is_closed.load() && current_size_.load() == 0) {
+                throw message_queue::MessageQueueException("Empty and Closed");
+            }
+        }
+
+        bool TrySyncAndUnderflowPrework() noexcept override {
+            return current_size_.load() > 0;
+        }
+
+        T PopMessage() override {
+            while(true) {
+                Node<T>* first = head_.load();
+                Node<T>* last = tail_.load();
+                Node<T>* next = first->next.load();
+
+                if (first == head_.load()) {
+                    if (first == last) {
+                        if (next == nullptr) {
+                            continue;
+                        }
+                        
+                        tail_.compare_exchange_strong(last, next);
+                    } else {
+                        if (next == nullptr) {
+                            continue;
+                        }
+
+                        if (head_.compare_exchange_weak(first, next)) {
+                            T res = std::move(next->value);
+
+                            {
+                                std::lock_guard<std::mutex> lock(retired_mtx_);
+
+                                retired_nodes_.push_back(first);
+                            }
+                            
+                            return res;
+                        }
                     }
                 }
+                
+                stats_.cas_retries.fetch_add(1);
             }
-            
-            stats_.cas_retries.fetch_add(1);
         }
-    }
+
+        void ReadPostwork() override {
+            current_size_.fetch_sub(1);
+
+            stats_.successful_operations.fetch_add(1);
+
+            not_full_.notify_one();
+        }
+
+        bool CheckSendDeadlockPossibility() const noexcept override {
+            return this->IsBothRole() && current_size_.load() >= kCapacity_;
+        }
+
+        bool CheckReadDeadlockPossibility() const noexcept override {
+            return this->IsBothRole() && current_size_.load() == 0;
+        }
 
     public:
-        Queue(size_t max_capacity)
+        MichaelScottQueue(size_t max_capacity)
             : kCapacity_(max_capacity)
         {
             Node<T>* dummy = allocator_.allocate(1);
@@ -120,7 +198,7 @@ class Queue {
             tail_.store(dummy);
         }
 
-        ~Queue() {
+        ~MichaelScottQueue() {
             while (Node<T>* current = head_.load()) {
                 head_.store(current->next.load());
 
@@ -128,97 +206,31 @@ class Queue {
 
                 allocator_.deallocate(current, 1);
             }
-        }
 
-        bool Send(T value) {
-            {
-                std::unique_lock<std::mutex> lock(mtx);
-
-                not_full.wait(lock, [this] {
-                    return current_size_.load() < kCapacity_ || is_closed.load();
-                });
-
-                if (is_closed.load()) {
-                    return false;
-                }
-            }
-
-            StoreMessage(std::move(value));
-
-            current_size_.fetch_add(1);
-            stats_.successful_operations.fetch_add(1);
-            not_empty.notify_one();
-
-            return true;
-        };
-        
-        bool TrySend(T value) {
-            if (is_closed.load() || current_size_.load() >= kCapacity_) {
-                return false;
-            }
-
-            StoreMessage(std::move(value));
-
-            current_size_.fetch_add(1);
-            stats_.successful_operations.fetch_add(1);
-            not_empty.notify_one();
-
-            return true;
-        };
-        
-        std::optional<T> Read() {
-            {
-                std::unique_lock<std::mutex> lock(mtx);
-                not_empty.wait(lock, [this] {
-                    return current_size_.load() > 0 || is_closed.load();
-                });
-
-                if (is_closed.load() && current_size_.load() == 0) {
-                    return std::nullopt;
-                }
-            }
-
-            std::optional<T> result = PopMessage();
-
-            if (result) {
-                current_size_.fetch_sub(1);
-                stats_.successful_operations.fetch_add(1);
-                not_full.notify_one();
-            }
-
-            return result;
-        }
-        
-        std::optional<T> TryRead() {
-            if (current_size_.load() == 0) {
-                return std::nullopt;
-            }
-
-            auto result = PopMessage();
-
-            if (result) {
-                current_size_.fetch_sub(1);
-                stats_.successful_operations.fetch_add(1);
+            for (Node<T>* current : retired_nodes_) {
+                current->~Node();
                 
-                not_full.notify_one();
+                allocator_.deallocate(current, 1);
             }
-            
-            return result;
         }
-        
-        size_t Size() const {
+
+        size_t Size() const noexcept override {
             return current_size_.load();
-        };
+        }
+
+        bool Empty() const noexcept override {
+            return current_size_.load() == 0;
+        }
+
+        void Close() override {
+            is_closed.store(true);
+
+            not_empty_.notify_all();
+
+            not_full_.notify_all();
+        }
         
         QueueStatsSnapshot Stats() const {
             return {stats_.cas_retries.load(), stats_.successful_operations.load()};
-        };
-        
-        void Close() {
-            is_closed.store(true);
-
-            not_empty.notify_all();
-
-            not_full.notify_all();
         };
 };
