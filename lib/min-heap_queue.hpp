@@ -161,6 +161,32 @@ class PriorityMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Exc
     mutex_.unlock();
     not_full_.notify_one();
   }
+
+ public:
+  explicit PriorityMessageQueue(std::size_t capacity, Compare comp = Compare())
+      : capacity_(capacity), comp_instance_(std::move(comp)) {
+    if (capacity == 0) {
+      throw MessageQueueException("Capacity must be greater than zero");
+    }
+    heap_.reserve(capacity_);
+  }
+
+  std::size_t Size() const noexcept override {
+    return size_.load(std::memory_order_acquire);
+  }
+
+  bool Empty() const noexcept override {
+    return size_.load(std::memory_order_acquire) == 0;
+  }
+
+  void Close() override {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      closed_.store(true, std::memory_order_release);
+    }
+    not_full_.notify_all();
+    not_empty_.notify_all();
+  }
 };
 
 }
