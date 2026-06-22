@@ -31,7 +31,7 @@ template<
 >
 class IMessageQueue {
  private:
-  enum class ThreadRole {
+  enum class ThreadRole { // 
     kProducer,
     kConsumer,
     kBoth,
@@ -43,7 +43,8 @@ class IMessageQueue {
     return roles;
   }
 
-  static void MoveThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {
+  static void MoveThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {template<typename T>
+concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>;
     auto& roles = ThreadRolesByInstance();
     const auto it = roles.find(from);
     if (it != roles.end()) {
@@ -136,7 +137,7 @@ class IMessageQueue {
   virtual void SyncAndOverflowPrework() = 0;
   virtual bool TrySyncAndOverflowPrework() noexcept = 0;
   virtual void StoreMessage(const ValueType& message) = 0;
-  virtual void StoreMessage(ValueType&& message) = 0;
+  virtual void StoreMessage(ValueType&& message) = 0; 
   virtual void SendPostwork() {}
 
   virtual bool CheckReadDeadlockPossibility() const noexcept = 0;
