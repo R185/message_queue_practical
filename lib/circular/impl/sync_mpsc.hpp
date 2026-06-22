@@ -181,7 +181,7 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerSingleConsumer> {
   SendGuard AcquireSendOverwriteOldest() {
     send_mutex_.lock();
     const bool space_acquired = free_space_.try_acquire();
-    return SendGuard(this, space_acquired, true, space_acquired);
+    return SendGuard(this, space_acquired, true, true);
   }
 
   std::optional<SendGuard> TryAcquireSendOverwriteOldest() {
@@ -189,12 +189,16 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerSingleConsumer> {
       return std::nullopt;
     }
     const bool space_acquired = free_space_.try_acquire();
-    return SendGuard(this, space_acquired, true, space_acquired);
+    return SendGuard(this, space_acquired, true, true);
   }
 
   template<std::invocable Func>
   auto ExecuteSynced(Func&& func) const -> std::invoke_result_t<Func&> {
     return std::forward<Func>(func)();
+  }
+
+  void ConsumeOccupiedForOverwriteDrop() noexcept {
+    occupied_space_.acquire();
   }
 };
 
