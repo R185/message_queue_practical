@@ -58,9 +58,10 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerMultipleConsumer>
         }
         return;
       }
-      if (notify_occupied_ && space_acquired_) {
+      if (notify_occupied_) {
         sync_->ring_.CommitWriteCredit(true);
       }
+      return;
     }
 
     void Cancel() noexcept {
@@ -102,7 +103,7 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerMultipleConsumer>
         : sync_(sync)
         , mode_(mode)
         , space_acquired_(space_acquired)
-        , notify_occupied_(space_acquired)
+        , notify_occupied_(mode == Mode::kOverwriteOldest ? true : space_acquired)
         , reserved_index_(reserved_index) {}
 
     explicit SendGuard(
@@ -114,7 +115,7 @@ class CircularQueueSync<ThreadAccessCategory::kMultipleProducerMultipleConsumer>
         : sync_(sync)
         , mode_(mode)
         , space_acquired_(space_acquired)
-        , notify_occupied_(space_acquired)
+        , notify_occupied_(mode == Mode::kOverwriteOldest ? true : space_acquired)
         , reserved_index_(reserved_index)
         , overwrite_lock_(std::move(overwrite_lock)) {}
   };

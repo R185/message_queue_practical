@@ -29,11 +29,7 @@ class ICircularMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Ex
   std::vector<ValueType, Allocator> buffer_;
   const std::size_t capacity_;
 
-  using HeadType = std::conditional_t<
-      ThreadCategory == ThreadAccessCategory::kSingleProducerSingleConsumer ||
-          ThreadCategory == ThreadAccessCategory::kMultipleProducerSingleConsumer,
-      std::size_t,
-      std::atomic<std::size_t>>;
+  using HeadType = std::atomic<std::size_t>;
 
   using TailType = std::conditional_t<
       ThreadCategory == ThreadAccessCategory::kSingleProducerSingleConsumer ||
@@ -41,8 +37,9 @@ class ICircularMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Ex
       std::size_t,
       std::atomic<std::size_t>>;
 
-  std::size_t head_{0ull};
   std::size_t tail_{0ull};
+  std::atomic<std::size_t> head_atomic_{0ull};
+  std::atomic<std::size_t> tail_atomic_{0ull};
   std::atomic<std::size_t> count_{0ull};
 
   static auto& SendGuardsByThread() {
@@ -64,19 +61,31 @@ class ICircularMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Ex
   }
 
   std::size_t HeadIndex() const noexcept {
-    if constexpr (std::is_same_v<HeadType, std::size_t>) {
-      return head_;
-    } else {
-      return head_atomic_.load(std::memory_order_acquire);
-    }
+    return head_atomic_.load(std::memory_order_acquire);
   }
 
   void SetHeadIndex(std::size_t value) noexcept {
-    if constexpr (std::is_same_v<HeadType, std::size_t>) {
-      head_ = value;
-    } else {
-      head_atomic_.store(value, std::memory_order_release);
+    head_atomic_.store(value, std::memory_order_release);
+  }
+
+  bool AdvanceHeadForOverwriteDrop() noexcept {
+    std::size_t head = head_atomic_.load(std::memory_order_acquire);
+    for (int attempt = 0; attempt < 64; ++attempt) {
+      if (count_.load(std::memory_order_acquire) < capacity_) {
+        return false;
+      }
+      const std::size_t next = (head + 1ull) % capacity_;
+      if (head_atomic_.compare_exchange_weak(
+              head,
+              next,
+              std::memory_order_acq_rel,
+              std::memory_order_acquire
+          )) {
+        count_.fetch_sub(1, std::memory_order_acq_rel);
+        return true;
+      }
     }
+    return false;
   }
 
   void CancelSendOperation() {
@@ -126,17 +135,23 @@ class ICircularMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Ex
   }
 
   ValueType ReadHead() {
-    std::size_t index = HeadIndex();
     auto& guard = CurrentReadGuard();
     if (guard.has_value()) {
       const std::optional<std::size_t> reserved = guard->ReservedIndex();
       if (reserved.has_value()) {
-        index = *reserved;
+        return std::move(buffer_[*reserved]);
       }
     }
-    ValueType message = std::move(buffer_[index]);
-    if (!(guard.has_value() && guard->ReservedIndex().has_value())) {
-      SetHeadIndex((index + 1ull) % capacity_);
+
+    std::size_t head = head_atomic_.load(std::memory_order_acquire);
+    ValueType message = std::move(buffer_[head]);
+    while (!head_atomic_.compare_exchange_weak(
+        head,
+        (head + 1ull) % capacity_,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire
+    )) {
+      message = std::move(buffer_[head]);
     }
     return message;
   }
@@ -208,14 +223,14 @@ class ICircularMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Ex
 
   void StoreMessage(const ValueType& message) noexcept override {
     WriteTail(message);
-    count_.fetch_add(1, std::memory_order_release);
     CompleatSendOperation();
+    count_.fetch_add(1, std::memory_order_release);
   }
 
   void StoreMessage(ValueType&& message) override {
     WriteTail(std::move(message));
-    count_.fetch_add(1, std::memory_order_release);
     CompleatSendOperation();
+    count_.fetch_add(1, std::memory_order_release);
   }
 
   bool CheckReadDeadlockPossibility() const noexcept override {
@@ -253,9 +268,7 @@ class ICircularMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Ex
       : sync_(capacity)
       , buffer_(capacity)
       , capacity_(capacity) {
-    if constexpr (!std::is_same_v<HeadType, std::size_t>) {
-      head_atomic_.store(0ull, std::memory_order_relaxed);
-    }
+    head_atomic_.store(0ull, std::memory_order_relaxed);
     if constexpr (!std::is_same_v<TailType, std::size_t>) {
       tail_atomic_.store(0ull, std::memory_order_relaxed);
     }
@@ -279,10 +292,6 @@ class ICircularMessageQueue : public IMessageQueue<ValueType, ThreadCategory, Ex
       buffer_.clear();
     });
   }
-
- private:
-  std::atomic<std::size_t> head_atomic_{0ull};
-  std::atomic<std::size_t> tail_atomic_{0ull};
 };
 
 }  // namespace message_queue
