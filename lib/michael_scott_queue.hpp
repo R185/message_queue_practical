@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <optional>
 #include <vector>
 #include <mutex>
 #include <utility>
@@ -58,30 +59,106 @@ class MichaelScottQueue : public message_queue::IMessageQueue<T, Category, Polic
     QueueStats stats_;
     Allocator allocator_;
 
+    bool TryStoreInternal(T&& value) {
+        Node<T>* new_node = allocator_.allocate(1);
+        new (new_node) Node<T>{std::move(value)};
+
+        constexpr int kMaxAttempts = 64;
+        for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+            Node<T>* last = tail_.load(std::memory_order_acquire);
+            Node<T>* next = last->next.load(std::memory_order_acquire);
+
+            if (last != tail_.load(std::memory_order_acquire)) {
+                continue;
+            }
+
+            if (next == nullptr) {
+                if (last->next.compare_exchange_weak(
+                        next, new_node, std::memory_order_release, std::memory_order_relaxed)) {
+                    tail_.compare_exchange_strong(
+                        last, new_node, std::memory_order_release, std::memory_order_relaxed);
+                    return true;
+                }
+                stats_.cas_retries.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                tail_.compare_exchange_strong(
+                    last, next, std::memory_order_release, std::memory_order_relaxed);
+                stats_.cas_retries.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+
+        new_node->~Node();
+        allocator_.deallocate(new_node, 1);
+        return false;
+    }
+
     void StoreInternal(T&& value) {
         Node<T>* new_node = allocator_.allocate(1);
         new (new_node) Node<T>{std::move(value)};
 
         while (true) {
-            Node<T>* last = tail_.load();
-            Node<T>* next = last->next.load();
+            Node<T>* last = tail_.load(std::memory_order_acquire);
+            Node<T>* next = last->next.load(std::memory_order_acquire);
 
-            if (last == tail_.load()) {
+            if (last == tail_.load(std::memory_order_acquire)) {
                 if (next == nullptr) {
-                    if (last->next.compare_exchange_weak(next, new_node)) {
-                        tail_.compare_exchange_strong(last, new_node);
+                    if (last->next.compare_exchange_weak(
+                            next, new_node, std::memory_order_release, std::memory_order_relaxed)) {
+                        tail_.compare_exchange_strong(
+                            last, new_node, std::memory_order_release, std::memory_order_relaxed);
 
                         return;
                     }
 
-                    stats_.cas_retries.fetch_add(1);
+                    stats_.cas_retries.fetch_add(1, std::memory_order_relaxed);
                 } else {
-                    tail_.compare_exchange_strong(last, next);
+                    tail_.compare_exchange_strong(
+                        last, next, std::memory_order_release, std::memory_order_relaxed);
 
-                    stats_.cas_retries.fetch_add(1);
+                    stats_.cas_retries.fetch_add(1, std::memory_order_relaxed);
                 }
             }
         }
+    }
+
+    bool TryPopOnce(T& out) {
+        Node<T>* first = head_.load(std::memory_order_acquire);
+        Node<T>* last = tail_.load(std::memory_order_acquire);
+        Node<T>* next = first->next.load(std::memory_order_acquire);
+
+        if (first != head_.load(std::memory_order_acquire)) {
+            stats_.cas_retries.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+
+        if (first == last) {
+            if (next == nullptr) {
+                return false;
+            }
+
+            tail_.compare_exchange_strong(last, next, std::memory_order_release, std::memory_order_relaxed);
+
+            return false;
+        }
+
+        if (next == nullptr) {
+            return false;
+        }
+
+        if (head_.compare_exchange_weak(first, next, std::memory_order_release, std::memory_order_relaxed)) {
+            out = std::move(next->value);
+
+            {
+                std::lock_guard<std::mutex> lock(retired_mtx_);
+                retired_nodes_.push_back(first);
+            }
+
+            return true;
+        }
+
+        stats_.cas_retries.fetch_add(1, std::memory_order_relaxed);
+
+        return false;
     }
 
     protected:
@@ -136,38 +213,12 @@ class MichaelScottQueue : public message_queue::IMessageQueue<T, Category, Polic
         }
 
         T PopMessage() override {
-            while(true) {
-                Node<T>* first = head_.load();
-                Node<T>* last = tail_.load();
-                Node<T>* next = first->next.load();
+            while (true) {
+                T result{};
 
-                if (first == head_.load()) {
-                    if (first == last) {
-                        if (next == nullptr) {
-                            continue;
-                        }
-                        
-                        tail_.compare_exchange_strong(last, next);
-                    } else {
-                        if (next == nullptr) {
-                            continue;
-                        }
-
-                        if (head_.compare_exchange_weak(first, next)) {
-                            T res = std::move(next->value);
-
-                            {
-                                std::lock_guard<std::mutex> lock(retired_mtx_);
-
-                                retired_nodes_.push_back(first);
-                            }
-                            
-                            return res;
-                        }
-                    }
+                if (TryPopOnce(result)) {
+                    return result;
                 }
-                
-                stats_.cas_retries.fetch_add(1);
             }
         }
 
@@ -228,6 +279,42 @@ class MichaelScottQueue : public message_queue::IMessageQueue<T, Category, Polic
             not_empty_.notify_all();
 
             not_full_.notify_all();
+        }
+
+        bool TryEnqueue(T&& value) noexcept {
+            if (!TrySyncAndOverflowPrework()) {
+                return false;
+            }
+
+            if (!TryStoreInternal(std::move(value))) {
+                return false;
+            }
+
+            SendPostwork();
+
+            return true;
+        }
+
+        bool TryEnqueue(const T& value) noexcept {
+            T copy = value;
+
+            return TryEnqueue(std::move(copy));
+        }
+
+        std::optional<T> TryDequeue() noexcept {
+            if (!TrySyncAndUnderflowPrework()) {
+                return std::nullopt;
+            }
+
+            T value{};
+
+            if (!TryPopOnce(value)) {
+                return std::nullopt;
+            }
+
+            ReadPostwork();
+            
+            return value;
         }
         
         QueueStatsSnapshot Stats() const {
