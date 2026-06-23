@@ -43,8 +43,7 @@ class IMessageQueue {
     return roles;
   }
 
-  static void MoveThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {template<typename T>
-concept MessageType = std::is_move_constructible_v<T> && std::is_copy_constructible_v<T>;
+  static void MoveThreadRole(const IMessageQueue* from, IMessageQueue* to) noexcept {
     auto& roles = ThreadRolesByInstance();
     const auto it = roles.find(from);
     if (it != roles.end()) {
