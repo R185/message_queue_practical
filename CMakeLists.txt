@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(MESSAGE_QUEUE_OPTIMIZATION O2 CACHE STRING "Compiler optimization level: O0, O1, O2, O3")
 set_property(CACHE MESSAGE_QUEUE_OPTIMIZATION PROPERTY STRINGS O0 O1 O2 O3)
+option(MESSAGE_QUEUE_MARCH_NATIVE "Use native architecture optimizations" OFF)
 
 option(MESSAGE_QUEUE_ENABLE_TSAN "Build tests with ThreadSanitizer" OFF)
 
@@ -27,6 +28,18 @@ else()
   add_compile_options(-${MESSAGE_QUEUE_OPTIMIZATION})
 endif()
 
+if(MESSAGE_QUEUE_MARCH_NATIVE)
+  if(MSVC)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]")
+      message(WARNING "MESSAGE_QUEUE_MARCH_NATIVE is ignored for MSVC ARM targets")
+    else()
+      add_compile_options(/arch:AVX2)
+    endif()
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-march=native)
+  endif()
+endif()
+
 add_library(message_queue INTERFACE)
 target_include_directories(message_queue INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}/lib
@@ -34,5 +47,7 @@ target_include_directories(message_queue INTERFACE
 target_compile_features(message_queue INTERFACE cxx_std_20)
 
 enable_testing()
-add_subdirectory(tests)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/circular_buffer_correctness_test.cpp")
+  add_subdirectory(tests)
+endif()
 add_subdirectory(bin)
