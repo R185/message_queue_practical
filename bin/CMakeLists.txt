@@ -11,7 +11,7 @@ FetchContent_MakeAvailable(googlebenchmark)
 
 add_executable(
   message_queue_benchmark
-
+  benchmark.cpp
 )
 
 target_link_libraries(
