@@ -45,9 +45,6 @@ class DequeBoundedMessageQueue final
         return;
       }
       closed_ = true;
-      buffer_.clear();
-      used_ = 0;
-      free_ = capacity_;
     }
     not_full_.notify_all();
     not_empty_.notify_all();
@@ -90,11 +87,13 @@ class DequeBoundedMessageQueue final
       throw MessageQueueException("send on closed queue");
     }
     --free_;
+    lock.release();
   }
 
   bool TrySyncAndOverflowPrework() noexcept override {
-    std::lock_guard<std::mutex> lock(mutex_);
+    mutex_.lock();
     if (closed_ || free_ == 0) {
+      mutex_.unlock();
       return false;
     }
     --free_;
@@ -102,32 +101,30 @@ class DequeBoundedMessageQueue final
   }
 
   void StoreMessage(const ValueType& message) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     try {
       buffer_.push_back(message);
     } catch (...) {
       ++free_;
+      mutex_.unlock();
       not_full_.notify_one();
       throw;
     }
   }
 
   void StoreMessage(ValueType&& message) override {
-    std::lock_guard<std::mutex> lock(mutex_);
     try {
       buffer_.push_back(std::move(message));
     } catch (...) {
       ++free_;
+      mutex_.unlock();
       not_full_.notify_one();
       throw;
     }
   }
 
   void SendPostwork() override {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      ++used_;
-    }
+    ++used_;
+    mutex_.unlock();
     not_empty_.notify_one();
   }
 
@@ -138,11 +135,13 @@ class DequeBoundedMessageQueue final
       throw MessageQueueException("read on closed empty queue");
     }
     --used_;
+    lock.release();
   }
 
   bool TrySyncAndUnderflowPrework() noexcept override {
-    std::lock_guard<std::mutex> lock(mutex_);
+    mutex_.lock();
     if (used_ == 0) {
+      mutex_.unlock();
       return false;
     }
     --used_;
@@ -150,23 +149,21 @@ class DequeBoundedMessageQueue final
   }
 
   ValueType PopMessage() override {
-    std::lock_guard<std::mutex> lock(mutex_);
     try {
       ValueType message = std::move(buffer_.front());
       buffer_.pop_front();
       return message;
     } catch (...) {
       ++used_;
+      mutex_.unlock();
       not_empty_.notify_one();
       throw;
     }
   }
 
   void ReadPostwork() override {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      ++free_;
-    }
+    ++free_;
+    mutex_.unlock();
     not_full_.notify_one();
   }
 

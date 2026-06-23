@@ -16,8 +16,9 @@ class CircularDropOldestMessageQueue
     if (!this->IsFull()) {
       return;
     }
-    this->SetHeadIndex((this->HeadIndex() + 1ull) % this->capacity_);
-    this->count_.fetch_sub(1, std::memory_order_acq_rel);
+    if (!this->AdvanceHeadForOverwriteDrop()) {
+      return;
+    }
     this->CurrentSendGuard()->SuppressOccupiedNotify();
   }
 
