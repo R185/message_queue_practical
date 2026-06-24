@@ -8,6 +8,7 @@
 #include <mutex>
 #include <utility>
 
+#include "exception.hpp"
 #include "message_queue_interface.hpp"
 
 namespace message_queue {
@@ -241,9 +242,18 @@ class MichaelScottQueue : public message_queue::IMessageQueue<T, Category, Polic
         }
 
     public:
+        MichaelScottQueue(const MichaelScottQueue&) = delete;
+        MichaelScottQueue& operator=(const MichaelScottQueue&) = delete;
+        MichaelScottQueue(MichaelScottQueue&&) = delete;
+        MichaelScottQueue& operator=(MichaelScottQueue&&) = delete;
+
         MichaelScottQueue(size_t max_capacity)
             : kCapacity_(max_capacity)
         {
+            if (max_capacity == 0) {
+                throw MessageQueueException("Capacity must be greater than zero");
+            }
+
             Node<T>* dummy = allocator_.allocate(1);
             new (dummy) Node<T>{};
 
