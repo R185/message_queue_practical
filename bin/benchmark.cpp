@@ -39,7 +39,7 @@ struct DequeBoundedFactory {
 
 struct MichaelScottFactory {
   template<typename T, mq::ThreadAccessCategory Cat, mq::DeadlockExceptionPolicy Pol>
-  using QueueType = MichaelScottQueue<T, Cat, Pol>;
+  using QueueType = mq::MichaelScottQueue<T, Cat, Pol>;
 };
 
 struct PriorityQueueFactory {

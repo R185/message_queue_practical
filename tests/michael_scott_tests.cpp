@@ -7,7 +7,7 @@
 #include "michael_scott_queue.hpp"
 
 TEST(MichaelScottTests, StringSendAndRead) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{1};
@@ -18,7 +18,7 @@ TEST(MichaelScottTests, StringSendAndRead) {
 }
 
 TEST(MichaelScottTests, IntSendAndRead) {
-    MichaelScottQueue<int,
+    message_queue::MichaelScottQueue<int,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{1};
@@ -29,7 +29,7 @@ TEST(MichaelScottTests, IntSendAndRead) {
 }
 
 TEST(MichaelScottTests, OutOfCapacity) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{1};
@@ -40,7 +40,7 @@ TEST(MichaelScottTests, OutOfCapacity) {
 }
 
 TEST(MichaelScottTests, ReadEmptyMichaelScottQueue) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{1};
@@ -53,7 +53,7 @@ TEST(MichaelScottTests, ReadEmptyMichaelScottQueue) {
 }
 
 TEST(MichaelScottMichaelScottQueue, SendClosedMichaelScottQueue) {
-    MichaelScottQueue<int,
+    message_queue::MichaelScottQueue<int,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{1};
@@ -64,7 +64,7 @@ TEST(MichaelScottMichaelScottQueue, SendClosedMichaelScottQueue) {
 }
 
 TEST(MichaelScottMichaelScottQueue, ReadEmptyClosedMichaelScottQueue) {
-    MichaelScottQueue<int,
+    message_queue::MichaelScottQueue<int,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{1};
@@ -77,7 +77,7 @@ TEST(MichaelScottMichaelScottQueue, ReadEmptyClosedMichaelScottQueue) {
 }
 
 TEST(MichaelScottTests, NotThrowDestructor) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{1};
@@ -88,7 +88,7 @@ TEST(MichaelScottTests, NotThrowDestructor) {
 }
 
 TEST(MichaelScottTests, SizeCheck) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{5};
@@ -101,7 +101,7 @@ TEST(MichaelScottTests, SizeCheck) {
 }
 
 TEST(MichaelScottTests, StatsCheck) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{5};
@@ -110,14 +110,14 @@ TEST(MichaelScottTests, StatsCheck) {
     que.Send("321");
     que.Send("456");
     
-    QueueStatsSnapshot q_stats = que.Stats();
+    message_queue::QueueStatsSnapshot q_stats = que.Stats();
 
     EXPECT_EQ(q_stats.cas_retries, 0);
     EXPECT_EQ(q_stats.successful_operations, 3);
 }
 
 TEST(MichaelScottTests, MichaelScottQueueClose) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{5};
@@ -136,7 +136,7 @@ TEST(MichaelScottTests, MichaelScottQueueClose) {
 }
 
 TEST(MichaelScottTests, MichaelScottQueueSendClose) {
-    MichaelScottQueue<std::string,
+    message_queue::MichaelScottQueue<std::string,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{5};
@@ -149,7 +149,7 @@ TEST(MichaelScottTests, MichaelScottQueueSendClose) {
 
 TEST(MichaelScottMichaelScottQueue, ProducerConsumer) {
     const int kNumMessages = 1000;
-    MichaelScottQueue<int,
+    message_queue::MichaelScottQueue<int,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{10};
@@ -180,14 +180,14 @@ TEST(MichaelScottMichaelScottQueue, ProducerConsumer) {
         EXPECT_EQ(received[i], i);
     }
 
-    QueueStatsSnapshot q_stats = que.Stats();
+    message_queue::QueueStatsSnapshot q_stats = que.Stats();
 
     EXPECT_EQ(q_stats.cas_retries, 0);
     EXPECT_EQ(q_stats.successful_operations, 2000);
 }
 
 TEST(MichaelScottMichaelScottQueue, OldHeadNewTail) {
-    MichaelScottQueue<int,
+    message_queue::MichaelScottQueue<int,
         message_queue::ThreadAccessCategory::kSingleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que{2};
@@ -227,7 +227,7 @@ TEST(MichaelScottTests, ContendedSendCausesRetries) {
     const int kMessagesPerProducer = 10000;
     const int kCapacity = 100000;
 
-    MichaelScottQueue<int,
+    message_queue::MichaelScottQueue<int,
         message_queue::ThreadAccessCategory::kMultipleProducerSingleConsumer,
         message_queue::DeadlockExceptionPolicy::kNoException
     > que(kCapacity);
@@ -245,7 +245,7 @@ TEST(MichaelScottTests, ContendedSendCausesRetries) {
         t.join();
     }
 
-    QueueStatsSnapshot stats = que.Stats();
+    message_queue::QueueStatsSnapshot stats = que.Stats();
 
     EXPECT_GT(stats.successful_operations, 0);
 
