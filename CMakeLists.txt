@@ -47,7 +47,7 @@ target_include_directories(message_queue INTERFACE
 target_compile_features(message_queue INTERFACE cxx_std_20)
 
 enable_testing()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/circular_buffer_correctness_test.cpp")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
   add_subdirectory(tests)
 endif()
 add_subdirectory(bin)
