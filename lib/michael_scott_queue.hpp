@@ -10,6 +10,8 @@
 
 #include "message_queue_interface.hpp"
 
+namespace message_queue {
+
 template<typename T>
 struct Node {
     T value;
@@ -321,3 +323,5 @@ class MichaelScottQueue : public message_queue::IMessageQueue<T, Category, Polic
             return {stats_.cas_retries.load(), stats_.successful_operations.load()};
         };
 };
+
+}  // namespace message_queue
