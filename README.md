@@ -3,6 +3,7 @@
 ## ресурсы
 + [Задачи](https://vibecodingteem.atlassian.net/jira/plans/34/scenarios/34/timeline?vid=38)
 + [ADR](./ADR.md)
++ [Отчёт](https://typst.app/project/wfF0t6SSTMlPyAwAkpuBjz)
 
 ## Требования
 
